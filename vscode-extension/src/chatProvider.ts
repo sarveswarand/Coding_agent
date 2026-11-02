@@ -156,6 +156,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M1.2 1.6a.6.6 0 0 1 .8-.5l12.6 6.4a.6.6 0 0 1 0 1L2 14.9a.6.6 0 0 1-.8-.7L3 8.2 1.2 2.3a.6.6 0 0 1 0-.7zM4.2 8.6l-1.3 4.3L12.3 8 2.9 3.1l1.3 4.3h5.6v1.2H4.2z"/></svg>
       </button>
     </div>
+    <div id="usage" class="usage" hidden></div>
     <div class="hint">Enter to send · Shift+Enter for a new line</div>
   </footer>
 

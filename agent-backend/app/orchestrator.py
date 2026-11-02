@@ -2,6 +2,7 @@ import asyncio
 import logging
 import uuid
 
+from . import usage
 from .gateway import default_model, get_provider
 from .tools import READ_ONLY, TOOL_SCHEMAS, preview, run_tool
 
@@ -39,6 +40,8 @@ async def run_agent(session_id, workspace, user_text, model=None):
         for _ in range(25):  # hard cap on loop iterations
             turn = await provider.generate(model, SYSTEM, msgs, TOOL_SCHEMAS)
             msgs.append({"role": "assistant", "text": turn.text, "tool_calls": turn.tool_calls, "raw": turn.raw})
+            yield {"type": "usage", "model": model,
+                   "session": usage.record(session_id, model, turn.usage)}
             if turn.text:
                 yield {"type": "text", "text": turn.text}
             if not turn.tool_calls:

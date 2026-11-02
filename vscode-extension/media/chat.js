@@ -185,6 +185,21 @@
     append(box);
   }
 
+  // ---------- token usage ----------
+  const usageEl = $('usage');
+  const kfmt = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n));
+
+  function showUsage(t) {
+    const inTotal = t.input + t.cache_read + t.cache_write;
+    let cost = '';
+    if (t.unpriced_calls && !t.cost) cost = ' · cost n/a for this model';
+    else cost = ' · ≈$' + t.cost.toFixed(t.cost < 0.1 ? 4 : 2) + (t.unpriced_calls ? ' (+ unpriced calls)' : '');
+    usageEl.textContent = t.calls + (t.calls === 1 ? ' call' : ' calls') + ' · ' + kfmt(inTotal) + ' in' +
+      (t.cache_read ? ' (' + kfmt(t.cache_read) + ' cached)' : '') + ' · ' + kfmt(t.output) + ' out' + cost;
+    usageEl.title = 'Tokens used in this chat (estimate from list prices)';
+    usageEl.hidden = false;
+  }
+
   // ---------- state ----------
   // An approval card can't be answered once its stream is gone.
   function expireApprovals(label) {
@@ -251,6 +266,7 @@
     thinkingEl = null;
     openTools.length = 0;
     setRunning(false);
+    usageEl.hidden = true;
     empty.style.display = '';
     vscode.postMessage({ type: 'newChat' });
   }
@@ -297,6 +313,7 @@
         statusDot.title = 'Backend connected';
         break;
       }
+      case 'usage': showUsage(m.session); break;
       case 'text': addAssistant(m.text); break;
       case 'tool_call': addTool(m.name, m.input); break;
       case 'tool_result': finishTool(m.name, !!m.is_error); break;

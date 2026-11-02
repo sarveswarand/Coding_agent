@@ -18,6 +18,8 @@ class Turn:
     text: str = ""
     tool_calls: list = field(default_factory=list)  # [{"id","name","input"}]
     raw: tuple | None = None                         # (provider_name, provider_obj)
+    # input excludes cached tokens; output includes thinking tokens
+    usage: dict = field(default_factory=lambda: {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0})
 
 
 class AnthropicProvider:
@@ -59,7 +61,11 @@ class AnthropicProvider:
             messages=self._convert(messages))
         text = "\n".join(b.text for b in resp.content if b.type == "text" and b.text.strip())
         calls = [{"id": b.id, "name": b.name, "input": b.input} for b in resp.content if b.type == "tool_use"]
-        return Turn(text=text, tool_calls=calls, raw=(self.name, resp.content))
+        u = resp.usage
+        usage = {"input": u.input_tokens or 0, "output": u.output_tokens or 0,
+                 "cache_read": u.cache_read_input_tokens or 0,
+                 "cache_write": u.cache_creation_input_tokens or 0}
+        return Turn(text=text, tool_calls=calls, raw=(self.name, resp.content), usage=usage)
 
 
 class GeminiProvider:
@@ -106,15 +112,20 @@ class GeminiProvider:
             max_output_tokens=4096)
         resp = await self.client.aio.models.generate_content(
             model=model, contents=self._convert(messages), config=config)
+        m = resp.usage_metadata
+        cached = (m.cached_content_token_count or 0) if m else 0
+        usage = {"input": ((m.prompt_token_count or 0) - cached) if m else 0,
+                 "output": ((m.candidates_token_count or 0) + (m.thoughts_token_count or 0)) if m else 0,
+                 "cache_read": cached, "cache_write": 0}
         if not resp.candidates or not resp.candidates[0].content:
             reason = resp.candidates[0].finish_reason if resp.candidates else "no candidates"
-            return Turn(text=f"(Gemini returned no content: {reason})")
+            return Turn(text=f"(Gemini returned no content: {reason})", usage=usage)
         content = resp.candidates[0].content
         parts = content.parts or []
         text = "\n".join(p.text for p in parts if p.text and not p.thought and p.text.strip())
         calls = [{"id": fc.id or str(uuid.uuid4()), "name": fc.name, "input": dict(fc.args or {})}
                  for fc in (p.function_call for p in parts) if fc]
-        return Turn(text=text, tool_calls=calls, raw=(self.name, content))
+        return Turn(text=text, tool_calls=calls, raw=(self.name, content), usage=usage)
 
 
 PROVIDERS = {"anthropic": AnthropicProvider, "gemini": GeminiProvider}

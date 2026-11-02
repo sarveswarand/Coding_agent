@@ -9,6 +9,7 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.responses import StreamingResponse  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
+from . import usage  # noqa: E402
 from .gateway import list_models  # noqa: E402
 from .orchestrator import pending, run_agent  # noqa: E402
 
@@ -37,6 +38,12 @@ stops: dict[str, asyncio.Event] = {}  # session_id -> set when the user presses 
 @app.get("/models")
 async def models():
     return list_models()
+
+
+@app.get("/usage")
+async def usage_totals():
+    """Running token totals for every chat session since the backend started."""
+    return usage.sessions
 
 
 @app.post("/chat")
