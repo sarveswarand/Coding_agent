@@ -1,11 +1,18 @@
 import difflib
+import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 READ_ONLY = {"read_file", "list_dir", "search"}
-SKIP_DIRS = ("node_modules", "venv", ".git", "__pycache__")
+SKIP_DIRS = {"node_modules", "venv", ".venv", ".git", "__pycache__", "dist", "build", "out",
+             ".next", "coverage", ".idea", ".gradle"}
+BINARY_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp", ".pdf", ".zip", ".gz",
+               ".woff", ".woff2", ".ttf", ".eot", ".mp4", ".mp3", ".lock", ".map", ".exe", ".dll"}
+MAX_SEARCH_FILE_BYTES = 1_000_000
+SEARCH_BUDGET_S = 20
 
 TOOL_SCHEMAS = [
     {"name": "read_file", "description": "Read a text file in the workspace.",
@@ -56,20 +63,40 @@ def preview(root, name, a) -> str:
 
 def _search(root: str, pattern: str) -> str:
     if shutil.which("rg"):
-        r = subprocess.run(["rg", "-n", "--max-count", "5", "-g", "!node_modules", "-g", "!venv",
-                            pattern, "."], cwd=root, capture_output=True, text=True, timeout=30)
-        return r.stdout[:20_000] or "No matches"
-    rx = re.compile(pattern)
+        globs = [arg for d in SKIP_DIRS for arg in ("-g", f"!{d}")]
+        r = subprocess.run(["rg", "-n", "-i", "--max-count", "5", "--max-columns", "300",
+                            *globs, pattern, "."], cwd=root, capture_output=True, text=True, timeout=30)
+        return r.stdout[:10_000] or "No matches"
+    # Fallback when ripgrep isn't installed: prune skipped dirs before walking
+    # into them (rglob would traverse node_modules first), skip binary/large
+    # files, and stop after a time budget.
+    rx = re.compile(pattern, re.IGNORECASE)
     out = []
-    for f in Path(root).rglob("*"):
-        if f.is_file() and not any(s in f.parts for s in SKIP_DIRS):
+    deadline = time.monotonic() + SEARCH_BUDGET_S
+    timed_out = False
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for name in filenames:
+            if time.monotonic() > deadline:
+                timed_out = True
+                break
+            f = Path(dirpath) / name
+            if f.suffix.lower() in BINARY_EXTS:
+                continue
             try:
+                if f.stat().st_size > MAX_SEARCH_FILE_BYTES:
+                    continue
                 for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
                     if rx.search(line):
-                        out.append(f"{f.relative_to(root)}:{i}:{line}")
+                        out.append(f"{f.relative_to(root)}:{i}:{line[:300]}")
+                        if len(out) >= 100:
+                            return "\n".join(out) + "\n(truncated at 100 matches)"
             except Exception:
                 pass
-    return "\n".join(out[:200]) or "No matches"
+        if timed_out:
+            break
+    result = "\n".join(out) or "No matches"
+    return result + "\n(search stopped early: time limit reached)" if timed_out else result
 
 
 def run_tool(root: str, name: str, a: dict) -> str:

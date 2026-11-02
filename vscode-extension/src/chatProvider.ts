@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 
 export class ChatProvider implements vscode.WebviewViewProvider {
   private sessionId = randomUUID();
+  private current?: AbortController; // the in-flight /chat request, if any
   constructor(private ctx: vscode.ExtensionContext) {}
 
   resolveWebviewView(view: vscode.WebviewView) {
@@ -29,6 +30,16 @@ export class ChatProvider implements vscode.WebviewViewProvider {
       if (m.type === 'newChat') {
         this.sessionId = randomUUID();
       }
+      if (m.type === 'stop') {
+        // Ask the backend to cancel; it replies with a 'stopped' event and closes
+        // the stream. If it doesn't, drop the connection ourselves after 3s.
+        const ac = this.current;
+        const sid = this.sessionId;
+        try {
+          await fetch(`${base()}/cancel`, post({ session_id: sid }));
+        } catch { /* backend gone: the abort below ends things */ }
+        setTimeout(() => ac?.abort(), 3000);
+      }
       if (m.type === 'copy') {
         await vscode.env.clipboard.writeText(m.text);
       }
@@ -41,11 +52,13 @@ export class ChatProvider implements vscode.WebviewViewProvider {
           view.webview.postMessage({ type: 'error', message: 'Open a folder first.' });
           return;
         }
+        const ac = new AbortController();
+        this.current = ac;
         try {
-          const res = await fetch(
-            `${base()}/chat`,
-            post({ session_id: this.sessionId, workspace: ws, message: m.text, model: m.model })
-          );
+          const res = await fetch(`${base()}/chat`, {
+            ...post({ session_id: this.sessionId, workspace: ws, message: m.text, model: m.model }),
+            signal: ac.signal,
+          });
           const reader = res.body!.getReader();
           const dec = new TextDecoder();
           let buf = '';
@@ -58,17 +71,46 @@ export class ChatProvider implements vscode.WebviewViewProvider {
               const chunk = buf.slice(0, i);
               buf = buf.slice(i + 2);
               if (chunk.startsWith('data: ')) {
-                view.webview.postMessage(JSON.parse(chunk.slice(6)));
+                const ev = JSON.parse(chunk.slice(6));
+                view.webview.postMessage(ev);
+                // Safety net: if the panel isn't visible the user can't see the
+                // card, so ask with a normal VS Code notification as well.
+                if (ev.type === 'approval_request' && !view.visible) {
+                  void this.askViaNotification(view, ev, base(), post);
+                }
               }
             }
           }
         } catch (e: any) {
-          view.webview.postMessage({ type: 'error', message: `Backend unreachable: ${e.message}` });
+          if (ac.signal.aborted) {
+            view.webview.postMessage({ type: 'stopped' });
+          } else {
+            view.webview.postMessage({ type: 'error', message: `Backend unreachable: ${e.message}` });
+          }
         } finally {
+          if (this.current === ac) this.current = undefined;
           view.webview.postMessage({ type: 'stream_end' });
         }
       }
     });
+  }
+
+  private async askViaNotification(
+    view: vscode.WebviewView,
+    ev: { id: string; name: string; preview?: string },
+    baseUrl: string,
+    post: (body: unknown) => RequestInit
+  ) {
+    const what = ev.name === 'edit_file' ? 'edit a file' : `run: ${(ev.preview ?? '').slice(0, 120)}`;
+    const choice = await vscode.window.showInformationMessage(
+      `OrgAI wants to ${what}. Open the OrgAI panel to review.`,
+      'Approve',
+      'Reject'
+    );
+    if (!choice) return; // dismissed: the card in the panel can still be answered
+    const approved = choice === 'Approve';
+    await fetch(`${baseUrl}/approve`, post({ id: ev.id, approved }));
+    view.webview.postMessage({ type: 'approval_answered', id: ev.id, approved });
   }
 
   private html(webview: vscode.Webview, mediaRoot: vscode.Uri) {

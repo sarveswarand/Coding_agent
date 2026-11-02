@@ -27,6 +27,13 @@ class ApproveReq(BaseModel):
     approved: bool
 
 
+class CancelReq(BaseModel):
+    session_id: str
+
+
+stops: dict[str, asyncio.Event] = {}  # session_id -> set when the user presses Stop
+
+
 @app.get("/models")
 async def models():
     return list_models()
@@ -39,10 +46,20 @@ async def chat(req: ChatReq):
         # extension's fetch drops idle connections after ~5 min. Send an SSE
         # comment every 15s so the stream stays alive.
         events = run_agent(req.session_id, req.workspace, req.message, req.model).__aiter__()
+        stop = stops[req.session_id] = asyncio.Event()
+        stop_wait = asyncio.ensure_future(stop.wait())
         nxt = asyncio.ensure_future(events.__anext__())
         try:
             while True:
-                done, _ = await asyncio.wait({nxt}, timeout=15)
+                done, _ = await asyncio.wait({nxt, stop_wait}, timeout=15,
+                                             return_when=asyncio.FIRST_COMPLETED)
+                if stop_wait in done:
+                    # Stop pressed: cancel whatever the agent is doing (model call,
+                    # waiting for approval, ...). run_agent's finally repairs history.
+                    nxt.cancel()
+                    await asyncio.gather(nxt, return_exceptions=True)
+                    yield f"data: {json.dumps({'type': 'stopped'})}\n\n"
+                    break
                 if not done:
                     yield ": ping\n\n"
                     continue
@@ -56,7 +73,18 @@ async def chat(req: ChatReq):
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
         finally:
             nxt.cancel()
+            stop_wait.cancel()
+            if stops.get(req.session_id) is stop:
+                del stops[req.session_id]
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@app.post("/cancel")
+async def cancel(req: CancelReq):
+    stop = stops.get(req.session_id)
+    if stop:
+        stop.set()
+    return {"ok": True, "running": stop is not None}
 
 
 @app.post("/approve")

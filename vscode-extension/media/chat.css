@@ -72,6 +72,11 @@ select#model {
   scroll-behavior: smooth;
 }
 
+/* Never let a flex item shrink: cards/code blocks use overflow:hidden, so when
+   the chat is taller than the panel they would be squeezed and clip their
+   own content (including the Approve/Reject buttons). */
+#log > * { flex-shrink: 0; }
+
 .msg { max-width: 100%; line-height: 1.5; word-wrap: break-word; overflow-wrap: anywhere; animation: rise .18s ease-out; }
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
@@ -158,7 +163,7 @@ code {
 .cmd::before { content: "$ "; color: var(--muted); }
 .cmd.blocked { color: var(--bad); }
 
-.actions { display: flex; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); }
+.actions { display: flex; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); position: sticky; bottom: 0; background: var(--card); }
 .btn { padding: 4px 14px; border-radius: 6px; border: 1px solid transparent; }
 .btn.primary { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
 .btn.primary:hover { background: var(--vscode-button-hoverBackground); }
@@ -197,4 +202,7 @@ textarea#input::placeholder { color: var(--vscode-input-placeholderForeground); 
 #send { flex: none; width: 30px; height: 30px; border: none; border-radius: 8px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); display: grid; place-items: center; }
 #send:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
 #send:disabled { opacity: .45; cursor: default; }
+#send.stop { background: var(--bad); color: #fff; }
+#send.stop:hover { filter: brightness(1.1); }
+.note { align-self: center; font-size: 0.85em; color: var(--muted); padding: 2px 10px; border: 1px dashed var(--border); border-radius: 999px; }
 .hint { margin-top: 6px; font-size: 0.8em; color: var(--muted); text-align: center; }

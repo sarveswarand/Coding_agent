@@ -11,6 +11,7 @@
   let running = false;
   let thinkingEl = null;
   const openTools = []; // tool chips still waiting for their result
+  const approvalCards = {}; // approval id -> function that marks the card answered
 
   // ---------- helpers ----------
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -65,6 +66,11 @@
       const code = (nl >= 0 ? part.slice(nl + 1) : part).replace(/\n$/, '');
       return codeBlock(code, lang);
     }).join('');
+  }
+
+  // Text of the "Working…" indicator at the bottom of the chat.
+  function setStatus(text) {
+    if (thinkingEl) thinkingEl.querySelector('span').textContent = text;
   }
 
   // ---------- message renderers ----------
@@ -134,12 +140,18 @@
     actions.append(yes, no);
     card.appendChild(actions);
 
-    const answer = (ok) => {
-      vscode.postMessage({ type: 'approve', id: m.id, approved: ok });
+    const settle = (ok) => {
+      setStatus('Working…');
       actions.remove();
       card.classList.add(ok ? 'approved' : 'rejected');
       head.querySelector('.badge').textContent = ok ? 'Approved' : 'Rejected';
     };
+    approvalCards[m.id] = settle; // lets a notification answer update this card
+    const answer = (ok) => {
+      vscode.postMessage({ type: 'approve', id: m.id, approved: ok });
+      settle(ok);
+    };
+    setStatus('Waiting for your approval ↑');
     yes.onclick = () => answer(true);
     no.onclick = () => answer(false);
     append(card);
@@ -175,24 +187,47 @@
 
   // ---------- state ----------
   // An approval card can't be answered once its stream is gone.
-  function expireApprovals() {
+  function expireApprovals(label) {
     document.querySelectorAll('.approval:not(.approved):not(.rejected)').forEach((card) => {
       const actions = card.querySelector('.actions');
       if (actions) actions.remove();
       card.classList.add('rejected');
-      card.querySelector('.badge').textContent = 'Expired';
+      card.querySelector('.badge').textContent = label || 'Expired';
     });
   }
 
+  // The send button doubles as the Stop button while a request is running.
+  const SEND_ICON = sendBtn.innerHTML;
+  const STOP_ICON = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="3" width="10" height="10" rx="2"/></svg>';
+  let stopping = false;
+
   function setRunning(on) {
     running = on;
-    sendBtn.disabled = on;
+    if (!on) stopping = false;
+    sendBtn.classList.toggle('stop', on);
+    sendBtn.innerHTML = on ? STOP_ICON : SEND_ICON;
+    sendBtn.title = on ? 'Stop (Esc)' : 'Send (Enter)';
+    sendBtn.setAttribute('aria-label', on ? 'Stop' : 'Send');
     if (on && !thinkingEl) {
       thinkingEl = el('div', 'thinking', '<i></i><i></i><i></i><span>Working…</span>');
       log.appendChild(thinkingEl);
       scrollDown();
     }
     if (!on && thinkingEl) { thinkingEl.remove(); thinkingEl = null; }
+  }
+
+  function stop() {
+    if (!running || stopping) return;
+    stopping = true;
+    vscode.postMessage({ type: 'stop' });
+    if (thinkingEl) thinkingEl.querySelector('span').textContent = 'Stopping…';
+  }
+
+  function markStopped() {
+    openTools.splice(0).forEach((c) => { c.classList.add('failed'); c.querySelector('.state').textContent = '✕'; });
+    expireApprovals('Cancelled');
+    if (!log.querySelector('.note.stopped:last-child')) append(el('div', 'note stopped', 'Stopped'));
+    setRunning(false);
   }
 
   function send() {
@@ -211,20 +246,23 @@
   }
 
   function newChat() {
-    log.querySelectorAll('.msg, .tool, .approval, .error, .thinking').forEach((n) => n.remove());
+    if (running) stop(); // cancel the old request before dropping its session
+    log.querySelectorAll('.msg, .tool, .approval, .error, .thinking, .note').forEach((n) => n.remove());
     thinkingEl = null;
     openTools.length = 0;
-    running = false;
-    sendBtn.disabled = false;
+    setRunning(false);
     empty.style.display = '';
     vscode.postMessage({ type: 'newChat' });
   }
 
   // ---------- events ----------
-  sendBtn.onclick = send;
+  sendBtn.onclick = () => (running ? stop() : send());
   input.addEventListener('input', autosize);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') stop();
   });
   $('new').onclick = newChat;
   document.querySelectorAll('.chip').forEach((c) => {
@@ -261,14 +299,20 @@
       }
       case 'text': addAssistant(m.text); break;
       case 'tool_call': addTool(m.name, m.input); break;
-      case 'tool_result': finishTool(m.name, false); break;
+      case 'tool_result': finishTool(m.name, !!m.is_error); break;
       case 'approval_request': addApproval(m); break;
+      case 'approval_answered':
+        if (approvalCards[m.id]) approvalCards[m.id](m.approved);
+        break;
       case 'error':
         openTools.splice(0).forEach((c) => { c.classList.add('failed'); c.querySelector('.state').textContent = '✕'; });
         if (/Backend unreachable/.test(m.message)) { statusDot.className = 'dot bad'; statusDot.title = 'Backend not reachable'; }
         expireApprovals();
         addError(m.message);
         setRunning(false);
+        break;
+      case 'stopped':
+        markStopped();
         break;
       case 'done':
       case 'stream_end':
