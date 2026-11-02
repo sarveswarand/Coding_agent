@@ -1,0 +1,34 @@
+{
+  "name": "orgai-code-agent",
+  "displayName": "OrgAI Code Agent",
+  "description": "Chat-based coding agent backed by a local Python tool-calling loop",
+  "version": "0.0.1",
+  "publisher": "orgai",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other"],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [{ "id": "orgai", "title": "OrgAI", "icon": "media/icon.svg" }]
+    },
+    "views": {
+      "orgai": [{ "type": "webview", "id": "orgai.chat", "name": "Chat" }]
+    },
+    "configuration": {
+      "properties": {
+        "orgai.backendUrl": { "type": "string", "default": "http://127.0.0.1:8765" }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}
