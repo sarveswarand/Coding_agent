@@ -6,3 +6,4 @@ out/
 /venv
 *.vsix
 usage.jsonl
+bench/results/
