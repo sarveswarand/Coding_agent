@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import platform
@@ -20,6 +21,11 @@ MAX_INSTRUCTIONS_CHARS = 20_000
 # Shell syntax that could chain another command onto an allowed one.
 SHELL_META = re.compile(r"[&|;<>`\r\n]|\$\(")
 REJECTED = "User rejected this action."
+MAX_STEPS = int(os.environ.get("AGENT_MAX_STEPS", "40"))  # model turns per request
+STEP_LIMIT_NOTICE = ("Stopped after {n} steps without a final answer. "
+                     "Reply 'continue' to let me keep going from here.")
+REPEAT_NOTICE = ("You already made this exact call and the result is earlier in the conversation. "
+                 "Don't repeat it: use that result, or try a different search or tool.")
 
 pending: dict[str, asyncio.Future] = {}  # approval_id -> Future[(approved, always)]
 sessions: dict[str, list] = {}           # session_id -> provider-neutral messages
@@ -103,7 +109,8 @@ async def run_agent(session_id, workspace, user_text, model=None, context=None,
     aid = None
     try:
         system = await asyncio.to_thread(_system_prompt, workspace)
-        for _ in range(25):  # hard cap on loop iterations
+        seen_reads: set[str] = set()  # read-only calls already made since the last write/command
+        for _ in range(MAX_STEPS):  # hard cap on loop iterations
             for attempt in range(4):
                 try:
                     turn = await provider.generate(model, system, msgs, TOOL_SCHEMAS)
@@ -153,7 +160,15 @@ async def run_agent(session_id, workspace, user_text, model=None, context=None,
                             if not approved:
                                 result.update(content=REJECTED, is_error=True)
                     if not result["is_error"]:
-                        result["content"] = await asyncio.to_thread(run_tool, workspace, name, args)
+                        key = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
+                        if name in READ_ONLY and key in seen_reads:
+                            result["content"] = REPEAT_NOTICE
+                        else:
+                            result["content"] = await asyncio.to_thread(run_tool, workspace, name, args)
+                            if name in READ_ONLY:
+                                seen_reads.add(key)
+                            else:
+                                seen_reads.clear()  # an edit or command may have changed what reads return
                 except Exception as e:
                     result.update(content=f"Error: {e}", is_error=True)
                 results.append(result)
@@ -161,6 +176,10 @@ async def run_agent(session_id, workspace, user_text, model=None, context=None,
                     log.warning("tool %s failed: %s", name, result["content"][:300])
                 yield {"type": "tool_result", "name": name, "is_error": result["is_error"]}
             msgs.append({"role": "tool", "results": results})
+        else:  # the loop ran out of steps instead of ending with an answer; don't stop silently
+            notice = STEP_LIMIT_NOTICE.format(n=MAX_STEPS)
+            msgs.append({"role": "assistant", "text": notice, "tool_calls": [], "raw": None})
+            yield {"type": "text", "text": notice}
         yield {"type": "done"}
     finally:
         # Runs on normal exit, on error, and when the turn is cancelled (Stop).
