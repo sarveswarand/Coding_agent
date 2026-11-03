@@ -63,6 +63,12 @@ TOOL_SCHEMAS = [
     {"name": "run_command", "description": "Run a shell command in the workspace root.",
      "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
 ]
+TOOL_NAMES = {t["name"] for t in TOOL_SCHEMAS}
+
+
+def unknown_tool_message(name: str) -> str:
+    """Error text for a made-up tool name; lists the real ones so the model can retry correctly."""
+    return f"Unknown tool '{name}'. Available tools: {', '.join(sorted(TOOL_NAMES))}."
 
 
 def _safe(root: str, rel: str) -> Path:
@@ -247,4 +253,4 @@ def run_tool(root: str, name: str, a: dict) -> str:
     if name == "run_command":
         r = subprocess.run(a["command"], shell=True, cwd=root, capture_output=True, text=True, timeout=120)
         return (f"exit={r.returncode}\n{r.stdout}\n{r.stderr}")[-20_000:]
-    raise ValueError(f"Unknown tool {name}")
+    raise ValueError(unknown_tool_message(name))

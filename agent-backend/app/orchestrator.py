@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import usage
 from .gateway import RateLimited, default_model, get_provider
-from .tools import READ_ONLY, TOOL_SCHEMAS, git_branch, preview, run_tool
+from .tools import READ_ONLY, TOOL_NAMES, TOOL_SCHEMAS, git_branch, preview, run_tool, unknown_tool_message
 
 log = logging.getLogger("uvicorn.error")  # shows up in the uvicorn terminal
 
@@ -130,6 +130,8 @@ async def run_agent(session_id, workspace, user_text, model=None, context=None,
                 yield {"type": "tool_call", "name": name, "input": args}
                 result = {"id": call["id"], "name": name, "content": "", "is_error": False}
                 try:
+                    if name not in TOOL_NAMES:  # reject before the approval prompt, which would ask about a tool that doesn't exist
+                        raise ValueError(unknown_tool_message(name))
                     if name not in READ_ONLY:
                         shown = await asyncio.to_thread(preview, workspace, name, args)
                         why = _auto_approval(session_id, name, args, approval_mode, allowed_commands)

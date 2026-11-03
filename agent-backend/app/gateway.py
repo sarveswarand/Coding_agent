@@ -183,7 +183,9 @@ class GeminiProvider:
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 OLLAMA_PREFIX = "ollama/"          # model ids for local models look like "ollama/qwen2.5-coder:7b"
 OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "16384"))  # Ollama's own default (4096) would silently cut history
-OLLAMA_MAX_TOOL_CHARS = 8000       # small local models choke on huge tool results
+# OLLAMA_THINK=0 turns off Qwen3-style reasoning (much faster on CPU), =1 forces it on; unset = model default.
+OLLAMA_THINK = {"0": False, "false": False, "1": True, "true": True}.get(os.environ.get("OLLAMA_THINK", "").lower())
+OLLAMA_MAX_TOOL_CHARS = 8000      # small local models choke on huge tool results
 
 
 def _ollama_installed() -> list[str]:
@@ -191,7 +193,7 @@ def _ollama_installed() -> list[str]:
     import json
     import urllib.request
     try:
-        with urllib.request.urlopen(OLLAMA_HOST.rstrip("/") + "/api/tags", timeout=0.7) as r:
+        with urllib.request.urlopen(OLLAMA_HOST.rstrip("/") + "/api/tags", timeout=5) as r:  # generous: a busy CPU-bound model answers slowly
             return [m["name"] for m in json.load(r).get("models", [])]
     except Exception:
         return []
@@ -268,7 +270,7 @@ class OllamaProvider:
         specs = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
                                                    "parameters": t["input_schema"]}} for t in tools]
         resp = await self.client.chat(
-            model=name, messages=self._convert(system, messages), tools=specs,
+            model=name, messages=self._convert(system, messages), tools=specs, think=OLLAMA_THINK,
             options={"num_ctx": OLLAMA_NUM_CTX, "temperature": 0.2, "num_predict": 2048})
         msg = resp.message
         text = msg.content or ""
