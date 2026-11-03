@@ -3,3 +3,4 @@ uvicorn
 anthropic
 google-genai
 python-dotenv
+ollama
