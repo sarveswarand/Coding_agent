@@ -207,4 +207,6 @@ textarea#input::placeholder { color: var(--vscode-input-placeholderForeground); 
 .note { align-self: center; font-size: 0.85em; color: var(--muted); padding: 2px 10px; border: 1px dashed var(--border); border-radius: 999px; }
 .usage { margin-top: 6px; font-size: 0.8em; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
 .usage[hidden] { display: none; }
+/* Editor context sent with the message above it. */
+.ctx { align-self: flex-end; max-width: 88%; margin-top: calc(4px - var(--gap)); font-size: 0.8em; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hint { margin-top: 6px; font-size: 0.8em; color: var(--muted); text-align: center; }

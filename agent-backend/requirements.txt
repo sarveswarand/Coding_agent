@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-anthropic
+anthropic>=2.3  # top-level cache_control (automatic prompt caching)
 google-genai
 python-dotenv
 ollama
