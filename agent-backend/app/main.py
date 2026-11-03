@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Literal
 
 from dotenv import load_dotenv
 
@@ -16,16 +17,37 @@ from .orchestrator import pending, run_agent  # noqa: E402
 app = FastAPI()
 
 
+class Problem(BaseModel):
+    line: int
+    severity: str
+    message: str
+
+
+class EditorContext(BaseModel):
+    """What the user has open in VS Code when they send a message."""
+    file: str
+    cursor_line: int
+    unsaved: bool = False
+    selection: str | None = None
+    selection_start: int | None = None
+    selection_end: int | None = None
+    problems: list[Problem] = []
+
+
 class ChatReq(BaseModel):
     session_id: str
     workspace: str
     message: str
     model: str | None = None
+    context: EditorContext | None = None
+    approval_mode: Literal["ask", "autoEdits"] = "ask"
+    allowed_commands: list[str] = []
 
 
 class ApproveReq(BaseModel):
     id: str
     approved: bool
+    always: bool = False  # "Always allow": run this exact command without asking for the rest of the chat
 
 
 class CancelReq(BaseModel):
@@ -52,7 +74,10 @@ async def chat(req: ChatReq):
         # While the agent waits on a human approval nothing is sent, and the
         # extension's fetch drops idle connections after ~5 min. Send an SSE
         # comment every 15s so the stream stays alive.
-        events = run_agent(req.session_id, req.workspace, req.message, req.model).__aiter__()
+        events = run_agent(req.session_id, req.workspace, req.message, req.model,
+                           context=req.context.model_dump() if req.context else None,
+                           approval_mode=req.approval_mode,
+                           allowed_commands=req.allowed_commands).__aiter__()
         stop = stops[req.session_id] = asyncio.Event()
         stop_wait = asyncio.ensure_future(stop.wait())
         nxt = asyncio.ensure_future(events.__anext__())
@@ -98,5 +123,5 @@ async def cancel(req: CancelReq):
 async def approve(req: ApproveReq):
     fut = pending.pop(req.id, None)
     if fut and not fut.done():
-        fut.set_result(req.approved)
+        fut.set_result((req.approved, req.always))
     return {"ok": True}

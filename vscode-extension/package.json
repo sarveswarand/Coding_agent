@@ -16,8 +16,32 @@
       "orgai": [{ "type": "webview", "id": "orgai.chat", "name": "Chat" }]
     },
     "configuration": {
+      "title": "OrgAI",
       "properties": {
-        "orgai.backendUrl": { "type": "string", "default": "http://127.0.0.1:8765" }
+        "orgai.backendUrl": { "type": "string", "default": "http://127.0.0.1:8765" },
+        "orgai.sendEditorContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send the active file name, your selection, the cursor line and that file's errors and warnings with each message."
+        },
+        "orgai.approvalMode": {
+          "type": "string",
+          "enum": ["ask", "autoEdits"],
+          "enumDescriptions": [
+            "Ask before every file edit and command.",
+            "Apply file edits without asking (each diff is still shown in the chat); still ask before commands."
+          ],
+          "default": "ask",
+          "scope": "application",
+          "description": "When OrgAI may act without asking you first. User setting only, so a repository can't change it."
+        },
+        "orgai.allowedCommands": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "scope": "application",
+          "markdownDescription": "Commands OrgAI may run without asking, e.g. `npm test` or `git status`. An entry also allows extra arguments (`npm test` allows `npm test -- --watch=false`). Commands containing `&`, `|`, `;`, `<`, `>`, `` ` ``, `$(` or a line break always ask. User setting only, so a repository can't change it."
+        }
       }
     }
   },

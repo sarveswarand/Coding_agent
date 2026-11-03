@@ -85,9 +85,15 @@
     append(wrap);
   }
 
-  const VERBS = { read_file: 'Read', list_dir: 'List', search: 'Search', edit_file: 'Edit', run_command: 'Run' };
+  const VERBS = {
+    read_file: 'Read', list_dir: 'List', find_files: 'Find', search: 'Search',
+    git_status: 'Git status', git_diff: 'Git diff', edit_file: 'Edit', run_command: 'Run',
+  };
   function toolTarget(name, input) {
-    return input.path || input.pattern || input.command || '';
+    if (name === 'read_file' && input.start_line) {
+      return input.path + ':' + input.start_line + (input.end_line ? '-' + input.end_line : '');
+    }
+    return input.pattern || input.path || input.command || '';
   }
 
   function addTool(name, input) {
@@ -120,7 +126,8 @@
     return pre;
   }
 
-  function addApproval(m) {
+  // Card showing an edit's diff or a command; approval buttons are added by the caller.
+  function actionCard(m) {
     const isEdit = m.name === 'edit_file';
     const card = el('div', 'approval');
     const pathMatch = isEdit && /^\+\+\+ (.+)$/m.exec(m.preview || '');
@@ -133,11 +140,30 @@
     const preview = m.preview || '';
     if (isEdit) card.appendChild(renderDiff(preview));
     else card.appendChild(el('pre', 'cmd' + (preview.startsWith('BLOCKED') ? ' blocked' : ''), esc(preview)));
+    return { card, head, isEdit };
+  }
 
+  // An edit or command that ran without asking (approval mode or allowed commands).
+  function addAutoApproved(m) {
+    const { card, head } = actionCard(m);
+    card.classList.add('approved');
+    const badge = head.querySelector('.badge');
+    badge.textContent = 'Auto-approved';
+    badge.title = m.reason || '';
+    append(card);
+  }
+
+  function addApproval(m) {
+    const { card, head, isEdit } = actionCard(m);
     const actions = el('div', 'actions');
     const yes = el('button', 'btn primary', 'Approve');
     const no = el('button', 'btn secondary', 'Reject');
     actions.append(yes, no);
+    const always = isEdit ? null : el('button', 'btn secondary', 'Always allow');
+    if (always) {
+      always.title = 'Approve, and run this exact command without asking for the rest of this chat';
+      actions.append(always);
+    }
     card.appendChild(actions);
 
     const settle = (ok) => {
@@ -147,13 +173,14 @@
       head.querySelector('.badge').textContent = ok ? 'Approved' : 'Rejected';
     };
     approvalCards[m.id] = settle; // lets a notification answer update this card
-    const answer = (ok) => {
-      vscode.postMessage({ type: 'approve', id: m.id, approved: ok });
+    const answer = (ok, alwaysAllow) => {
+      vscode.postMessage({ type: 'approve', id: m.id, approved: ok, always: !!alwaysAllow });
       settle(ok);
     };
     setStatus('Waiting for your approval ↑');
     yes.onclick = () => answer(true);
     no.onclick = () => answer(false);
+    if (always) always.onclick = () => answer(true, true);
     append(card);
   }
 
@@ -262,7 +289,7 @@
 
   function newChat() {
     if (running) stop(); // cancel the old request before dropping its session
-    log.querySelectorAll('.msg, .tool, .approval, .error, .thinking, .note').forEach((n) => n.remove());
+    log.querySelectorAll('.msg, .ctx, .tool, .approval, .error, .thinking, .note').forEach((n) => n.remove());
     thinkingEl = null;
     openTools.length = 0;
     setRunning(false);
@@ -318,6 +345,14 @@
       case 'tool_call': addTool(m.name, m.input); break;
       case 'tool_result': finishTool(m.name, !!m.is_error); break;
       case 'approval_request': addApproval(m); break;
+      case 'auto_approved': addAutoApproved(m); break;
+      case 'status': setStatus(m.text || 'Working…'); break;
+      case 'context': {
+        // Which file/selection went along with the message just sent.
+        const users = log.querySelectorAll('.msg.user');
+        if (users.length) users[users.length - 1].after(el('div', 'ctx', esc('Context: ' + m.label)));
+        break;
+      }
       case 'approval_answered':
         if (approvalCards[m.id]) approvalCards[m.id](m.approved);
         break;

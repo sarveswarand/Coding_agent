@@ -1,10 +1,36 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { randomUUID } from 'crypto';
+
+type EditorContext = {
+  file: string;
+  cursor_line: number;
+  unsaved: boolean;
+  selection?: string;
+  selection_start?: number;
+  selection_end?: number;
+  problems: { line: number; severity: string; message: string }[];
+};
+
+// Short description of the context, shown under the user's message.
+function contextLabel(c: EditorContext) {
+  const where = c.selection ? `lines ${c.selection_start}-${c.selection_end}` : `line ${c.cursor_line}`;
+  const n = c.problems.length;
+  return `${c.file} · ${where}` + (n ? ` · ${n} problem${n > 1 ? 's' : ''}` : '');
+}
 
 export class ChatProvider implements vscode.WebviewViewProvider {
   private sessionId = randomUUID();
   private current?: AbortController; // the in-flight /chat request, if any
-  constructor(private ctx: vscode.ExtensionContext) {}
+  // Typing in the chat takes focus from the editor, so remember the last one used.
+  private lastEditor = vscode.window.activeTextEditor;
+  constructor(private ctx: vscode.ExtensionContext) {
+    ctx.subscriptions.push(
+      vscode.window.onDidChangeActiveTextEditor((e) => {
+        if (e) this.lastEditor = e;
+      })
+    );
+  }
 
   resolveWebviewView(view: vscode.WebviewView) {
     const mediaRoot = vscode.Uri.joinPath(this.ctx.extensionUri, 'media');
@@ -44,7 +70,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         await vscode.env.clipboard.writeText(m.text);
       }
       if (m.type === 'approve') {
-        await fetch(`${base()}/approve`, post({ id: m.id, approved: m.approved }));
+        await fetch(`${base()}/approve`, post({ id: m.id, approved: m.approved, always: !!m.always }));
       }
       if (m.type === 'send') {
         const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -52,11 +78,22 @@ export class ChatProvider implements vscode.WebviewViewProvider {
           view.webview.postMessage({ type: 'error', message: 'Open a folder first.' });
           return;
         }
+        const cfg = vscode.workspace.getConfiguration('orgai');
+        const context = cfg.get<boolean>('sendEditorContext', true) ? this.editorContext(ws) : undefined;
+        if (context) view.webview.postMessage({ type: 'context', label: contextLabel(context) });
         const ac = new AbortController();
         this.current = ac;
         try {
           const res = await fetch(`${base()}/chat`, {
-            ...post({ session_id: this.sessionId, workspace: ws, message: m.text, model: m.model }),
+            ...post({
+              session_id: this.sessionId,
+              workspace: ws,
+              message: m.text,
+              model: m.model,
+              context,
+              approval_mode: cfg.get<string>('approvalMode', 'ask'),
+              allowed_commands: cfg.get<string[]>('allowedCommands', []),
+            }),
             signal: ac.signal,
           });
           const reader = res.body!.getReader();
@@ -93,6 +130,35 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         }
       }
     });
+  }
+
+  // What the user has open, so "fix this" or "explain this" needs no searching.
+  private editorContext(ws: string): EditorContext | undefined {
+    const ed = vscode.window.activeTextEditor ?? this.lastEditor;
+    if (!ed || ed.document.isClosed || ed.document.uri.scheme !== 'file') return undefined;
+    const doc = ed.document;
+    const sel = ed.selection;
+    const rel = path.relative(ws, doc.uri.fsPath);
+    const inside = rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+    // A selection that ends at the start of a line doesn't include that line.
+    const endLine = sel.end.character === 0 && sel.end.line > sel.start.line ? sel.end.line : sel.end.line + 1;
+    return {
+      file: inside ? rel.split(path.sep).join('/') : doc.uri.fsPath,
+      cursor_line: sel.active.line + 1,
+      unsaved: doc.isDirty,
+      ...(sel.isEmpty
+        ? {}
+        : { selection: doc.getText(sel).slice(0, 20_000), selection_start: sel.start.line + 1, selection_end: endLine }),
+      problems: vscode.languages
+        .getDiagnostics(doc.uri)
+        .filter((d) => d.severity <= vscode.DiagnosticSeverity.Warning)
+        .slice(0, 20)
+        .map((d) => ({
+          line: d.range.start.line + 1,
+          severity: d.severity === vscode.DiagnosticSeverity.Error ? 'error' : 'warning',
+          message: d.message.slice(0, 500),
+        })),
+    };
   }
 
   private async askViaNotification(

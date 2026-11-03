@@ -159,7 +159,7 @@ async def run_task(model, name, setup, check, prompt, timeout):
                     cmd = ev["preview"].strip()
                     ok = bool(SAFE_CMD.match(cmd)) and not any(x in cmd for x in UNSAFE)
                     m["rejected_cmds"] += 0 if ok else 1
-                o.pending[ev["id"]].set_result(ok)
+                o.pending[ev["id"]].set_result((ok, False))  # (approved, always allow)
 
     try:
         await asyncio.wait_for(consume(), timeout)

@@ -23,11 +23,27 @@ The project consists of two main components:
 ## Agent Tools
 
 The agent has access to the following workspace tools:
-- **`read_file`**: Read the contents of a text file.
+- **`read_file`**: Read a text file with line numbers, optionally just a line range (`start_line`/`end_line`).
 - **`list_dir`**: List files and directories in the workspace.
-- **`search`**: Search file contents for a regex pattern (uses `ripgrep` if available, or falls back to recursive Python file search).
-- **`edit_file`**: Edit a file by replacing exact `old` text with `new` text (or create a new file if `old` is empty). Requires user approval.
-- **`run_command`**: Execute a shell command in the workspace root. Requires user approval.
+- **`find_files`**: Find files by name with a glob such as `*.py` or `src/**/*.ts`.
+- **`search`**: Search file contents for a regex or plain text, optionally limited to files matching a glob and with context lines (uses `ripgrep` if available, or falls back to recursive Python file search).
+- **`git_status`** / **`git_diff`**: Show the branch, the changed files, and uncommitted changes.
+- **`edit_file`**: Edit a file by replacing exact `old` text with `new` text (or create a new file if `old` is empty). Requires user approval unless edits are auto-approved (see below).
+- **`run_command`**: Execute a shell command in the workspace root. Requires user approval unless the command is allowed (see below).
+
+### What the agent is told
+
+- **Editor context**: each message includes the active file, your selection, the cursor line and that file's errors and warnings. Turn this off with the `orgai.sendEditorContext` setting.
+- **Project instructions**: if the workspace root contains `AGENTS.md` or `.orgai.md`, its contents are added to the agent's instructions. This is a good place for build and test commands and coding conventions.
+- **Environment**: the OS, the shell `run_command` uses (cmd.exe on Windows), the workspace root and the git branch.
+
+### Approval settings
+
+- `orgai.approvalMode`: `ask` (default) asks before every edit and command. `autoEdits` applies edits without asking (each diff is still shown in the chat) and still asks before commands.
+- `orgai.allowedCommands`: commands that run without asking, for example `["npm test", "git status"]`. An entry also allows extra arguments (`npm test -- --watch=false`). Commands containing `&`, `|`, `;`, `<`, `>`, `` ` ``, `$(` or a line break always ask.
+- **Always allow** on a command's approval card runs that exact command without asking for the rest of the chat.
+
+These two settings can only be set in your user settings, not in a repository's `.vscode/settings.json`, so a cloned repository can't approve its own commands.
 
 ---
 
@@ -49,11 +65,12 @@ The agent has access to the following workspace tools:
    pip install -r requirements.txt
    ```
 
-4. Configure environment variables (API keys for LLM providers like OpenAI, Anthropic, or Gemini):
+4. Configure environment variables (an API key for Anthropic, Gemini, or both):
    ```bash
    cp .env.example .env
    # Edit .env and add your API keys
    ```
+   **Using Gemini's free tier:** create a key at https://aistudio.google.com/apikey, set `GEMINI_API_KEY` in `.env`, and leave `ANTHROPIC_API_KEY` empty. The default model is `gemini-3.4-flash-lite` (change it with `GEMINI_MODEL`). Free-tier limits are per minute and per day (see https://aistudio.google.com/rate-limit). When the per-minute limit is hit, the agent waits as long as Gemini asks and then continues; the daily limit resets at midnight Pacific time. Google may use free-tier prompts and responses, which include your code, to improve its products (see the [Gemini API terms](https://ai.google.dev/gemini-api/terms)).
 
 5. Start the FastAPI development server:
    ```bash

@@ -8,9 +8,23 @@ between turns:
 `raw` keeps the provider's own message (thinking blocks, thought signatures)
 and is replayed verbatim when the same provider handles the next turn.
 """
+import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
+
+log = logging.getLogger("uvicorn.error")
+
+CUT_OFF = "(Reply cut off: it hit the output length limit. Ask me to continue, or to work in smaller steps.)"
+
+
+class RateLimited(Exception):
+    """A per-minute rate limit was hit; the same request can be retried after `retry_after` seconds."""
+
+    def __init__(self, message: str, retry_after: float):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 @dataclass
@@ -56,16 +70,39 @@ class AnthropicProvider:
         return out
 
     async def generate(self, model, system, messages, tools) -> Turn:
+        # Automatic prompt caching: each loop step re-sends the previous request plus
+        # a little more, so the shared prefix is read from cache at ~1/10 the price.
         resp = await self.client.messages.create(
-            model=model, max_tokens=4096, system=system, tools=tools,
-            messages=self._convert(messages))
+            model=model, max_tokens=16_000, system=system, tools=tools,
+            messages=self._convert(messages), cache_control={"type": "ephemeral"})
         text = "\n".join(b.text for b in resp.content if b.type == "text" and b.text.strip())
         calls = [{"id": b.id, "name": b.name, "input": b.input} for b in resp.content if b.type == "tool_use"]
         u = resp.usage
         usage = {"input": u.input_tokens or 0, "output": u.output_tokens or 0,
                  "cache_read": u.cache_read_input_tokens or 0,
                  "cache_write": u.cache_creation_input_tokens or 0}
+        # A turn stopped by max_tokens or a refusal can end inside a tool call, so never
+        # run its tools; keep only the text so no tool_use is left without a result.
+        if resp.stop_reason == "max_tokens":
+            return Turn(text=f"{text}\n\n{CUT_OFF}".strip(), usage=usage)
+        if resp.stop_reason == "refusal":
+            category = getattr(getattr(resp, "stop_details", None), "category", None)
+            return Turn(text=f"{text}\n\n(Claude declined this request{f': {category}' if category else ''}.)".strip(),
+                        usage=usage)
+        if not text and not calls:
+            return Turn(text="(Claude returned an empty reply.)", usage=usage)
         return Turn(text=text, tool_calls=calls, raw=(self.name, resp.content), usage=usage)
+
+
+def _gemini_429(e) -> Exception:
+    """Per-minute limits are worth waiting for (Gemini says how long); a daily quota isn't."""
+    details = str(e.details)
+    if "PerDay" in details:
+        return RuntimeError("Gemini free-tier daily rate limit reached for this model. It resets at midnight "
+                            "Pacific time; until then, switch models or use a paid key.")
+    m = (re.search(r"retryDelay'?:\s*'?([\d.]+)s", details)
+         or re.search(r"retry in ([\d.]+)\s*s", str(e), re.IGNORECASE))
+    return RateLimited(f"Gemini rate limit: {e.message}", float(m.group(1)) if m else 30.0)
 
 
 class GeminiProvider:
@@ -73,7 +110,11 @@ class GeminiProvider:
 
     def __init__(self):
         from google import genai
-        self.client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+        from google.genai import types
+        # The SDK retries transient server errors (e.g. 503 "model overloaded", common on the
+        # free tier). 429s are left to the agent loop, which waits as long as Gemini asks.
+        self.client = genai.Client(api_key=os.environ["GEMINI_API_KEY"], http_options=types.HttpOptions(
+            retry_options=types.HttpRetryOptions(attempts=4, http_status_codes=[500, 502, 503, 504])))
 
     @staticmethod
     def available() -> bool:
@@ -102,16 +143,23 @@ class GeminiProvider:
         return out
 
     async def generate(self, model, system, messages, tools) -> Turn:
-        from google.genai import types
+        from google.genai import errors, types
+        # Tools without arguments (git_status) get no schema: Gemini can reject empty "properties".
         decls = [types.FunctionDeclaration(name=t["name"], description=t["description"],
-                                           parameters_json_schema=t["input_schema"]) for t in tools]
+                                           parameters_json_schema=t["input_schema"] if t["input_schema"]["properties"] else None)
+                 for t in tools]
         config = types.GenerateContentConfig(
             system_instruction=system,
             tools=[types.Tool(function_declarations=decls)],
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-            max_output_tokens=4096)
-        resp = await self.client.aio.models.generate_content(
-            model=model, contents=self._convert(messages), config=config)
+            max_output_tokens=16_000)
+        try:
+            resp = await self.client.aio.models.generate_content(
+                model=model, contents=self._convert(messages), config=config)
+        except errors.APIError as e:
+            if e.code == 429:
+                raise _gemini_429(e) from e
+            raise
         m = resp.usage_metadata
         cached = (m.cached_content_token_count or 0) if m else 0
         usage = {"input": ((m.prompt_token_count or 0) - cached) if m else 0,
@@ -125,6 +173,10 @@ class GeminiProvider:
         text = "\n".join(p.text for p in parts if p.text and not p.thought and p.text.strip())
         calls = [{"id": fc.id or str(uuid.uuid4()), "name": fc.name, "input": dict(fc.args or {})}
                  for fc in (p.function_call for p in parts) if fc]
+        if resp.candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
+            return Turn(text=f"{text}\n\n{CUT_OFF}".strip(), usage=usage)  # a function call may be cut off: don't run it
+        if not text and not calls:
+            return Turn(text=f"(Gemini returned an empty reply: {resp.candidates[0].finish_reason})", usage=usage)
         return Turn(text=text, tool_calls=calls, raw=(self.name, content), usage=usage)
 
 
@@ -246,7 +298,7 @@ def _catalog():
     models = [
         {"id": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5-5"), "label": "Claude",
          "provider": "anthropic"},
-        {"id": os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite"), "label": "Gemini Flash-Lite",
+        {"id": os.environ.get("GEMINI_MODEL", "gemini-3.4-flash-lite"), "label": "Gemini Flash-Lite",
          "provider": "gemini"},
     ]
     models += [{"id": OLLAMA_PREFIX + n, "label": f"Local: {n}", "provider": "ollama"}
