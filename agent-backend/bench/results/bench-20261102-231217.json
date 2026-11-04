@@ -1,0 +1,62 @@
+[
+  {
+    "model": "ollama/qwen2.5-coder:7b",
+    "task": "T1 explore + answer",
+    "passed": false,
+    "status": "ok",
+    "seconds": 27.5,
+    "calls": 1,
+    "tool_calls": 0,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 390,
+    "out": 40,
+    "inline_tool_calls": 0,
+    "gen_tok_per_s": 4.2
+  },
+  {
+    "model": "ollama/qwen2.5-coder:7b",
+    "task": "T2 one-line edit",
+    "passed": true,
+    "status": "ok",
+    "seconds": 43.3,
+    "calls": 4,
+    "tool_calls": 3,
+    "tool_errors": 1,
+    "rejected_cmds": 0,
+    "in": 1918,
+    "out": 122,
+    "inline_tool_calls": 3,
+    "gen_tok_per_s": 4.1
+  },
+  {
+    "model": "ollama/qwen2.5-coder:7b",
+    "task": "T3 fix a bug",
+    "passed": false,
+    "status": "ok",
+    "seconds": 21.4,
+    "calls": 2,
+    "tool_calls": 1,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 852,
+    "out": 67,
+    "inline_tool_calls": 1,
+    "gen_tok_per_s": 4.2
+  },
+  {
+    "model": "ollama/qwen2.5-coder:7b",
+    "task": "T4 security fix",
+    "passed": false,
+    "status": "ok",
+    "seconds": 216.0,
+    "calls": 5,
+    "tool_calls": 4,
+    "tool_errors": 3,
+    "rejected_cmds": 0,
+    "in": 3170,
+    "out": 255,
+    "inline_tool_calls": 4,
+    "gen_tok_per_s": 1.3
+  }
+]

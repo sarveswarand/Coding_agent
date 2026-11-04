@@ -1,0 +1,126 @@
+[
+  {
+    "model": "ollama/qwen2.5-coder:7b",
+    "task": "T1 explore + answer",
+    "passed": false,
+    "status": "ok",
+    "seconds": 9.7,
+    "calls": 1,
+    "tool_calls": 0,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 390,
+    "out": 31,
+    "inline_tool_calls": 0,
+    "transcript": [
+      {
+        "text": "To find which function computes the discount and in which file it is defined, you can use the search function to look for patterns related to discount calculations."
+      }
+    ],
+    "gen_tok_per_s": 3.9
+  },
+  {
+    "model": "ollama/qwen2.5-coder:7b",
+    "task": "T2 one-line edit",
+    "passed": false,
+    "status": "ok",
+    "seconds": 36.3,
+    "calls": 2,
+    "tool_calls": 1,
+    "tool_errors": 1,
+    "rejected_cmds": 0,
+    "in": 839,
+    "out": 121,
+    "inline_tool_calls": 1,
+    "transcript": [
+      {
+        "tool": "edit_file",
+        "input": "{\"path\": \"config.py\", \"old\": \"MAX_RETRIES = [0-9]+\", \"new\": \"MAX_RETRIES = 5\"}"
+      },
+      {
+        "text": "To resolve the issue where the `old` pattern must match exactly once in the file, we need to ensure that the current value of `MAX_RETRIES` is correctly identified. Let's first search for the current value of `MAX_RETRIES` in `config.py`.\n\n{\"name\": \"search\", \"arguments\": {\"pattern\":\"MAX_RETRIES = [0-9]+\"}}"
+      }
+    ],
+    "gen_tok_per_s": 3.9
+  },
+  {
+    "model": "ollama/qwen2.5-coder:7b",
+    "task": "T3 fix a bug",
+    "passed": false,
+    "status": "ok",
+    "seconds": 101.7,
+    "calls": 4,
+    "tool_calls": 3,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 2183,
+    "out": 289,
+    "inline_tool_calls": 3,
+    "transcript": [
+      {
+        "tool": "list_dir",
+        "input": "{\"path\": \".\"}"
+      },
+      {
+        "tool": "read_file",
+        "input": "{\"path\": \"stats.py\"}"
+      },
+      {
+        "tool": "run_command",
+        "input": "{\"command\": \"python -m unittest\"}"
+      },
+      {
+        "text": "The bug in `stats.py` is in the `average` function. The denominator in the division should be `len(nums)` instead of `len(nums) + 1`. This is causing the average to be off by 1.\n\nHere is the corrected `average` function:\n\n```python\ndef average(nums):\n    if not nums:\n        return 0\n    return sum(nums) / len(nums)\n```\n\nNow, let's run the tests again to confirm they pass.\n\n```\n{\"name\": \"edit_file\", \"arguments\": {\"path\":\"stats.py\", \"old\":\"return sum(nums) / (len(nums) + 1)\", \"new\":\"return sum(nums) / len(nums)\"}}"
+      }
+    ],
+    "gen_tok_per_s": 3.8
+  },
+  {
+    "model": "ollama/qwen2.5-coder:7b",
+    "task": "T4 security fix",
+    "passed": false,
+    "status": "ok",
+    "seconds": 570.3,
+    "calls": 8,
+    "tool_calls": 7,
+    "tool_errors": 4,
+    "rejected_cmds": 0,
+    "in": 5950,
+    "out": 547,
+    "inline_tool_calls": 7,
+    "transcript": [
+      {
+        "tool": "edit_file",
+        "input": "{\"path\": \"config.py\", \"old\": \"X-Forwarded-For\", \"new\": \"X-Forwarded-For\\nif peer_ip not in TRUSTED_PROXIES:\\n    peer_ip = request.remote_addr\"}"
+      },
+      {
+        "tool": "edit_file",
+        "input": "{\"new\": \"X-Forwarded-For\\nif peer_ip not in TRUSTED_PROXIES:\\n    peer_ip = request.remote_addr\", \"old\": \"X-Forwarded-For\\n    peer_ip = request.remote_addr\", \"path\": \"config.py\"}"
+      },
+      {
+        "tool": "read_file",
+        "input": "{\"path\": \"config.py\"}"
+      },
+      {
+        "tool": "edit_file",
+        "input": "{\"new\": \"X-Forwarded-For\\nif peer_ip not in TRUSTED_PROXIES:\\n    peer_ip = request.remote_addr\", \"old\": \"X-Forwarded-For\\n    peer_ip = request.remote_addr\", \"path\": \"config.py\"}"
+      },
+      {
+        "tool": "read_file",
+        "input": "{\"path\": \"config.py\"}"
+      },
+      {
+        "tool": "edit_file",
+        "input": "{\"new\": \"X-Forwarded-For\\nif peer_ip not in TRUSTED_PROXIES:\\n    peer_ip = request.remote_addr\", \"old\": \"X-Forwarded-For\\n    peer_ip = request.remote_addr\", \"path\": \"config.py\"}"
+      },
+      {
+        "tool": "search",
+        "input": "{\"pattern\": \"X-Forwarded-For\"}"
+      },
+      {
+        "text": "\n"
+      }
+    ],
+    "gen_tok_per_s": 2.6
+  }
+]

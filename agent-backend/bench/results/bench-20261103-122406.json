@@ -1,0 +1,109 @@
+[
+  {
+    "model": "ollama/qwen3:8b",
+    "task": "T1 explore + answer",
+    "passed": false,
+    "status": "ok",
+    "seconds": 295.1,
+    "calls": 2,
+    "tool_calls": 1,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 1711,
+    "out": 714,
+    "inline_tool_calls": 0,
+    "transcript": [
+      {
+        "tool": "search",
+        "input": "{\"pattern\": \"def\\\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\\\s*\\\\(.*discount.*\", \"literal\": true, \"glob\": \"*.py\"}"
+      }
+    ],
+    "gen_tok_per_s": 2.9
+  },
+  {
+    "model": "ollama/qwen3:8b",
+    "task": "T2 one-line edit",
+    "passed": true,
+    "status": "ok",
+    "seconds": 424.2,
+    "calls": 4,
+    "tool_calls": 3,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 3564,
+    "out": 1093,
+    "inline_tool_calls": 0,
+    "transcript": [
+      {
+        "tool": "list_dir",
+        "input": "{\"path\": \".\"}"
+      },
+      {
+        "tool": "read_file",
+        "input": "{\"path\": \"config.py\", \"start_line\": 1, \"end_line\": 2000}"
+      },
+      {
+        "tool": "edit_file",
+        "input": "{\"path\": \"config.py\", \"old\": \"MAX_RETRIES = 3\", \"new\": \"MAX_RETRIES = 5\"}"
+      },
+      {
+        "text": "The change to `MAX_RETRIES = 5` has been successfully applied to `config.py`. No other modifications were made."
+      }
+    ],
+    "gen_tok_per_s": 3.0
+  },
+  {
+    "model": "ollama/qwen3:8b",
+    "task": "T3 fix a bug",
+    "passed": false,
+    "status": "timeout",
+    "seconds": 900.0,
+    "calls": 3,
+    "tool_calls": 3,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 2754,
+    "out": 1996,
+    "inline_tool_calls": 0,
+    "transcript": [
+      {
+        "tool": "list_dir",
+        "input": "{\"path\": \".\"}"
+      },
+      {
+        "tool": "read_file",
+        "input": "{\"path\": \"test_stats.py\"}"
+      },
+      {
+        "tool": "read_file",
+        "input": "{\"path\": \"stats.py\"}"
+      }
+    ],
+    "gen_tok_per_s": 3.1
+  },
+  {
+    "model": "ollama/qwen3:8b",
+    "task": "T4 security fix",
+    "passed": false,
+    "status": "timeout",
+    "seconds": 900.0,
+    "calls": 2,
+    "tool_calls": 2,
+    "tool_errors": 1,
+    "rejected_cmds": 0,
+    "in": 1947,
+    "out": 1896,
+    "inline_tool_calls": 0,
+    "transcript": [
+      {
+        "tool": "search",
+        "input": "{\"pattern\": \"X-Forwarded-For\", \"glob\": \"*.py\"}"
+      },
+      {
+        "tool": "edit_file",
+        "input": "{\"path\": \"client_ip.py\", \"old\": \"    fwd = headers.get(\\\"X-Forwarded-For\\\")\\n    return fwd or peer_ip\", \"new\": \"    if peer_ip in TRUSTED_PROXIES:\\n        return headers.get(\\\"X-Forwarded-For\\\") or peer_ip\\n    return peer_ip\"}"
+      }
+    ],
+    "gen_tok_per_s": 2.9
+  }
+]

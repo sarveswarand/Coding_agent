@@ -1,0 +1,112 @@
+[
+  {
+    "model": "ollama/qwen2.5-coder:7b",
+    "task": "T1 explore + answer",
+    "passed": true,
+    "status": "ok",
+    "seconds": 20.7,
+    "calls": 2,
+    "tool_calls": 1,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 853,
+    "out": 66,
+    "inline_tool_calls": 1,
+    "transcript": [
+      {
+        "text": "To find which function computes the discount and in which file it is defined, I would run the following command:"
+      },
+      {
+        "tool": "search",
+        "input": "{\"pattern\": \"discount\\\\s*\\\\(\"}"
+      },
+      {
+        "text": "The function that computes the discount is `apply_discount` and it is defined in the file `pricing.py`."
+      }
+    ],
+    "gen_tok_per_s": 4.1
+  },
+  {
+    "model": "ollama/qwen2.5-coder:7b",
+    "task": "T2 one-line edit",
+    "passed": false,
+    "status": "ok",
+    "seconds": 17.5,
+    "calls": 2,
+    "tool_calls": 1,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 825,
+    "out": 55,
+    "inline_tool_calls": 1,
+    "transcript": [
+      {
+        "tool": "edit_file",
+        "input": "{\"path\": \"config.py\", \"old\": \"MAX_RETRIES =\", \"new\": \"MAX_RETRIES = 5\"}"
+      },
+      {
+        "text": "The `MAX_RETRIES` has been updated to 5 in `config.py`."
+      }
+    ],
+    "gen_tok_per_s": 4.2
+  },
+  {
+    "model": "ollama/qwen2.5-coder:7b",
+    "task": "T3 fix a bug",
+    "passed": false,
+    "status": "ok",
+    "seconds": 20.2,
+    "calls": 2,
+    "tool_calls": 1,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 852,
+    "out": 62,
+    "inline_tool_calls": 1,
+    "transcript": [
+      {
+        "tool": "search",
+        "input": "{\"pattern\": \"test_stats.py\"}"
+      },
+      {
+        "text": "It seems the `test_stats.py` file is not present in the workspace. Please ensure the file is correctly named and located in the root directory of your workspace. Once confirmed, you can run the tests again."
+      }
+    ],
+    "gen_tok_per_s": 4.2
+  },
+  {
+    "model": "ollama/qwen2.5-coder:7b",
+    "task": "T4 security fix",
+    "passed": false,
+    "status": "ok",
+    "seconds": 84.3,
+    "calls": 4,
+    "tool_calls": 3,
+    "tool_errors": 2,
+    "rejected_cmds": 0,
+    "in": 2344,
+    "out": 271,
+    "inline_tool_calls": 3,
+    "transcript": [
+      {
+        "tool": "edit_file",
+        "input": "{\"path\": \"config.py\", \"old\": \"X-Forwarded-For\", \"new\": \"X-Forwarded-For\\nif peer_ip not in TRUSTED_PROXIES:\\n    peer_ip = request.headers.get('X-Forwarded-For', peer_ip)\"}"
+      },
+      {
+        "tool": "edit_file",
+        "input": "{\"new\": \"X-Forwarded-For\\nif peer_ip not in TRUSTED_PROXIES:\\n    peer_ip = request.headers.get('X-Forwarded-For', peer_ip)\", \"old\": \"X-Forwarded-For\\n    peer_ip = request.headers.get('X-Forwarded-For', peer_ip)\", \"path\": \"config.py\"}"
+      },
+      {
+        "text": "It seems the `old` text is not found in the file exactly once. Let's search for the exact line in the file first."
+      },
+      {
+        "tool": "search",
+        "input": "{\"pattern\": \"X-Forwarded-For\\n    peer_ip = request.headers.get('X-Forwarded-For', peer_ip)\"}"
+      },
+      {
+        "text": "The exact line \"X-Forwarded-For\\n    peer_ip = request.headers.get('X-Forwarded-For', peer_ip)\" does not exist in the file. Please ensure the text is correctly formatted and try again."
+      }
+    ],
+    "gen_tok_per_s": 4.0
+  }
+]

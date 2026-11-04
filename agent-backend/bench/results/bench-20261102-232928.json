@@ -1,0 +1,131 @@
+[
+  {
+    "model": "gemini-3.5-flash-lite",
+    "task": "T1 explore + answer",
+    "passed": true,
+    "status": "ok",
+    "seconds": 1.6,
+    "calls": 2,
+    "tool_calls": 1,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 735,
+    "out": 35,
+    "inline_tool_calls": 0,
+    "transcript": [
+      {
+        "tool": "search",
+        "input": "{\"pattern\": \"discount\"}"
+      },
+      {
+        "text": "The function `apply_discount` computes the discount and is defined in the file `pricing.py`."
+      }
+    ],
+    "gen_tok_per_s": null
+  },
+  {
+    "model": "gemini-3.5-flash-lite",
+    "task": "T2 one-line edit",
+    "passed": true,
+    "status": "ok",
+    "seconds": 3.7,
+    "calls": 5,
+    "tool_calls": 4,
+    "tool_errors": 0,
+    "rejected_cmds": 1,
+    "in": 2088,
+    "out": 138,
+    "inline_tool_calls": 0,
+    "transcript": [
+      {
+        "tool": "list_dir",
+        "input": "{\"path\": \".\"}"
+      },
+      {
+        "tool": "read_file",
+        "input": "{\"path\": \"config.py\"}"
+      },
+      {
+        "tool": "edit_file",
+        "input": "{\"path\": \"config.py\", \"new\": \"DEBUG = False\\nMAX_RETRIES = 5\\nTIMEOUT = 30\", \"old\": \"DEBUG = False\\nMAX_RETRIES = 3\\nTIMEOUT = 30\"}"
+      },
+      {
+        "tool": "run_command",
+        "input": "{\"command\": \"git diff\"}"
+      },
+      {
+        "text": "I have successfully updated `MAX_RETRIES` to `5` in `config.py` and changed nothing else."
+      }
+    ],
+    "gen_tok_per_s": null
+  },
+  {
+    "model": "gemini-3.5-flash-lite",
+    "task": "T3 fix a bug",
+    "passed": true,
+    "status": "ok",
+    "seconds": 5.8,
+    "calls": 7,
+    "tool_calls": 6,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 4843,
+    "out": 245,
+    "inline_tool_calls": 0,
+    "transcript": [
+      {
+        "tool": "list_dir",
+        "input": "{\"path\": \".\"}"
+      },
+      {
+        "tool": "read_file",
+        "input": "{\"path\": \"stats.py\"}"
+      },
+      {
+        "tool": "read_file",
+        "input": "{\"path\": \"test_stats.py\"}"
+      },
+      {
+        "tool": "run_command",
+        "input": "{\"command\": \"python -m unittest\"}"
+      },
+      {
+        "tool": "edit_file",
+        "input": "{\"new\": \"def average(nums):\\n    if not nums:\\n        return 0\\n    return sum(nums) / len(nums)\", \"old\": \"def average(nums):\\n    if not nums:\\n        return 0\\n    return sum(nums) / (len(nums) + 1)\", \"path\": \"stats.py\"}"
+      },
+      {
+        "tool": "run_command",
+        "input": "{\"command\": \"python -m unittest\"}"
+      },
+      {
+        "text": "I have found and fixed the bug in `stats.py` where `average(nums)` was dividing the sum of numbers by `len(nums) + 1` instead of `len(nums)`. All tests in `test_stats.py` now pass successfully when running `python -m unittest`."
+      }
+    ],
+    "gen_tok_per_s": null
+  },
+  {
+    "model": "gemini-3.5-flash-lite",
+    "task": "T4 security fix",
+    "passed": false,
+    "status": "error: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and ",
+    "seconds": 1.8,
+    "calls": 2,
+    "tool_calls": 2,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 966,
+    "out": 35,
+    "inline_tool_calls": 0,
+    "transcript": [
+      {
+        "tool": "search",
+        "input": "{\"pattern\": \"X-Forwarded-For\"}"
+      },
+      {
+        "tool": "list_dir",
+        "input": "{\"path\": \".\"}"
+      }
+    ],
+    "gen_tok_per_s": null
+  }
+]

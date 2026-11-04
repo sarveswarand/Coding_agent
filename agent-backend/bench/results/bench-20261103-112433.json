@@ -1,0 +1,108 @@
+[
+  {
+    "model": "ollama/qwen3:14b",
+    "task": "T1 explore + answer",
+    "passed": true,
+    "status": "ok",
+    "seconds": 848.9,
+    "calls": 4,
+    "tool_calls": 3,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 3631,
+    "out": 1217,
+    "inline_tool_calls": 0,
+    "transcript": [
+      {
+        "tool": "search",
+        "input": "{\"pattern\": \"def\\\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\\\s*\\\\(.*\\\\)\", \"glob\": \"**/*.py\", \"context\": 5}"
+      },
+      {
+        "tool": "list_dir",
+        "input": "{\"path\": \".\"}"
+      },
+      {
+        "tool": "read_file",
+        "input": "{\"path\": \"pricing.py\"}"
+      },
+      {
+        "text": "The function `apply_discount` in `pricing.py` computes the discount by reducing the price based on a given percentage."
+      }
+    ],
+    "gen_tok_per_s": 1.8
+  },
+  {
+    "model": "ollama/qwen3:14b",
+    "task": "T2 one-line edit",
+    "passed": true,
+    "status": "ok",
+    "seconds": 433.0,
+    "calls": 3,
+    "tool_calls": 2,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 2647,
+    "out": 660,
+    "inline_tool_calls": 0,
+    "transcript": [
+      {
+        "tool": "read_file",
+        "input": "{\"end_line\": 2000, \"path\": \"config.py\", \"start_line\": 1}"
+      },
+      {
+        "tool": "edit_file",
+        "input": "{\"new\": \"MAX_RETRIES = 5\", \"old\": \"MAX_RETRIES = 3\", \"path\": \"config.py\"}"
+      },
+      {
+        "text": "The change has been successfully made in `config.py`. The `MAX_RETRIES` variable is now set to `5`, and no other modifications were made to the file. Let me know if you need further assistance!"
+      }
+    ],
+    "gen_tok_per_s": 1.9
+  },
+  {
+    "model": "ollama/qwen3:14b",
+    "task": "T3 fix a bug",
+    "passed": false,
+    "status": "timeout",
+    "seconds": 900.0,
+    "calls": 2,
+    "tool_calls": 2,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 1714,
+    "out": 1352,
+    "inline_tool_calls": 0,
+    "transcript": [
+      {
+        "tool": "list_dir",
+        "input": "{\"path\": \".\"}"
+      },
+      {
+        "tool": "read_file",
+        "input": "{\"path\": \"stats.py\"}"
+      }
+    ],
+    "gen_tok_per_s": 1.7
+  },
+  {
+    "model": "ollama/qwen3:14b",
+    "task": "T4 security fix",
+    "passed": false,
+    "status": "timeout",
+    "seconds": 900.0,
+    "calls": 1,
+    "tool_calls": 1,
+    "tool_errors": 0,
+    "rejected_cmds": 0,
+    "in": 872,
+    "out": 882,
+    "inline_tool_calls": 0,
+    "transcript": [
+      {
+        "tool": "search",
+        "input": "{\"pattern\": \"X-Forwarded-For\", \"glob\": \"*.py\"}"
+      }
+    ],
+    "gen_tok_per_s": 1.8
+  }
+]

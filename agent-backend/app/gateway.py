@@ -192,10 +192,14 @@ def _ollama_installed() -> list[str]:
     """Names of locally installed Ollama models; [] if the server isn't running."""
     import json
     import urllib.request
+    # A custom User-Agent: Cloudflare tunnels/proxies in front of a remote Ollama often block urllib's default one.
+    req = urllib.request.Request(OLLAMA_HOST.rstrip("/") + "/api/tags", headers={"User-Agent": "orgai-backend/1.0"})
     try:
-        with urllib.request.urlopen(OLLAMA_HOST.rstrip("/") + "/api/tags", timeout=5) as r:  # generous: a busy CPU-bound model answers slowly
+        with urllib.request.urlopen(req, timeout=5) as r:  # generous: a busy CPU-bound model answers slowly
             return [m["name"] for m in json.load(r).get("models", [])]
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.getLogger("uvicorn.error").warning("Can't list Ollama models at %s: %s", OLLAMA_HOST, e)  # shows in the uvicorn terminal
         return []
 
 
