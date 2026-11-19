@@ -103,3 +103,19 @@ These two settings can only be set in your user settings, not in a repository's 
 
 5. **Installing the pre-built VSIX**:
    - You can install `vscode-extension/orgai-code-agent-0.0.1.vsix` directly in VS Code via the Extensions view menu (`...` -> "Install from VSIX...").
+
+---
+
+## Voice app for your phone
+
+The backend serves a web app at `/app/` that you can open on your phone (and add to the home screen). Tap **Talk** and speak: the agent narrates what it's doing, asks you to approve edits and commands by voice (or buttons), and you can speak again while it works to redirect it.
+
+1. **Pair** (on the PC, in `agent-backend/`):
+   ```bash
+   python -m app.pair --workspace "C:\Users\you\projects" --url https://YOUR-PC.your-tailnet.ts.net
+   ```
+   This creates `AGENT_TOKEN` in `.env`, limits the phone to the folder(s) you list (`AGENT_WORKSPACES`) and prints a link with the token in it. Restart the backend afterwards.
+2. **Reach the PC from your phone** without opening a port to the internet: install [Tailscale](https://tailscale.com) on both, then run `tailscale serve --bg 8000` on the PC. That gives an `https://` address, which phones require for microphone access.
+3. Open the printed link on the phone. Pick a project folder and tap **Talk**.
+
+Security notes: `/v1/*` always needs the token and only works inside `AGENT_WORKSPACES`. The VS Code endpoints stay open for direct local connections only; anything arriving through a proxy such as `tailscale serve` is treated as remote and needs the token. Anyone holding the token can run commands on the PC, so keep the link private; `python -m app.pair --new-token` revokes it. Voice recognition uses the phone browser's built-in speech service (Chrome on Android works best; on iPhone use the keyboard's dictation button).

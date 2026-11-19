@@ -46,7 +46,12 @@ def _repair_history(msgs: list) -> None:
         msgs.append({"role": "assistant", "text": "(Request interrupted)", "tool_calls": [], "raw": None})
 
 
-def _system_prompt(workspace: str) -> str:
+NARRATE = ("The user is talking to you by voice and hears your short messages read aloud. Before each "
+           "batch of tool calls, write one plain sentence (no code or file contents) saying what you are "
+           "about to do. When you finish, give a brief spoken-style summary of what you did and found.")
+
+
+def _system_prompt(workspace: str, narrate: bool = False) -> str:
     """SYSTEM plus facts about this machine and the project's own instructions.
     Built once per request, so it stays identical across the loop (prompt cache)."""
     if os.name == "nt":
@@ -61,6 +66,8 @@ def _system_prompt(workspace: str) -> str:
     if branch:
         env.append(f"- Git branch: {branch}")
     parts = [SYSTEM, "Environment:\n" + "\n".join(env)]
+    if narrate:
+        parts.insert(1, NARRATE)
     for name in INSTRUCTION_FILES:
         p = Path(workspace) / name
         if p.is_file():
@@ -101,16 +108,23 @@ def _auto_approval(session_id, name, args, approval_mode, allowed_commands) -> s
 
 
 async def run_agent(session_id, workspace, user_text, model=None, context=None,
-                    approval_mode="ask", allowed_commands=()):
+                    approval_mode="ask", allowed_commands=(), inbox: asyncio.Queue | None = None,
+                    narrate=False):
+    """`inbox` carries messages the user sends while the agent is working ("steering"); they are
+    added to the conversation before the next model call."""
     msgs = sessions.setdefault(session_id, [])
     msgs.append({"role": "user", "text": _with_context(user_text, context)})
     model = model or default_model()
     provider = get_provider(model)
     aid = None
     try:
-        system = await asyncio.to_thread(_system_prompt, workspace)
+        system = await asyncio.to_thread(_system_prompt, workspace, narrate)
         seen_reads: set[str] = set()  # read-only calls already made since the last write/command
         for _ in range(MAX_STEPS):  # hard cap on loop iterations
+            while inbox is not None and not inbox.empty():
+                steer = inbox.get_nowait()
+                msgs.append({"role": "user", "text": steer})
+                yield {"type": "steer", "text": steer}
             for attempt in range(4):
                 try:
                     turn = await provider.generate(model, system, msgs, TOOL_SCHEMAS)
@@ -129,6 +143,8 @@ async def run_agent(session_id, workspace, user_text, model=None, context=None,
             if turn.text:
                 yield {"type": "text", "text": turn.text}
             if not turn.tool_calls:
+                if inbox is not None and not inbox.empty():
+                    continue  # the user spoke while this turn was running: answer that too
                 break
 
             results = []

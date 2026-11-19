@@ -1,20 +1,27 @@
 import asyncio
 import json
+from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI  # noqa: E402
-from fastapi.responses import StreamingResponse  # noqa: E402
+from fastapi import APIRouter, Depends, FastAPI, Request  # noqa: E402
+from fastapi.responses import RedirectResponse, StreamingResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from . import usage  # noqa: E402
+from . import runs, usage  # noqa: E402
 from .gateway import list_models  # noqa: E402
 from .orchestrator import pending, run_agent  # noqa: E402
+from .security import allowed_roots, check_workspace, is_direct_local, require_local_or_token, require_token  # noqa: E402
 
 app = FastAPI()
+# Endpoints used by the VS Code extension: a direct local connection, or a valid token.
+local = APIRouter(dependencies=[Depends(require_local_or_token)])
+# Endpoints for remote clients such as the phone app: always need the token.
+remote = APIRouter(prefix="/v1", dependencies=[Depends(require_token)])
 
 
 class Problem(BaseModel):
@@ -57,19 +64,21 @@ class CancelReq(BaseModel):
 stops: dict[str, asyncio.Event] = {}  # session_id -> set when the user presses Stop
 
 
-@app.get("/models")
+@local.get("/models")
 async def models():
     return list_models()
 
 
-@app.get("/usage")
+@local.get("/usage")
 async def usage_totals():
     """Running token totals for every chat session since the backend started."""
     return usage.sessions
 
 
-@app.post("/chat")
-async def chat(req: ChatReq):
+@local.post("/chat")
+async def chat(req: ChatReq, request: Request):
+    req.workspace = check_workspace(req.workspace, remote=not is_direct_local(request))
+
     async def stream():
         # While the agent waits on a human approval nothing is sent, and the
         # extension's fetch drops idle connections after ~5 min. Send an SSE
@@ -111,7 +120,7 @@ async def chat(req: ChatReq):
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
-@app.post("/cancel")
+@local.post("/cancel")
 async def cancel(req: CancelReq):
     stop = stops.get(req.session_id)
     if stop:
@@ -119,9 +128,100 @@ async def cancel(req: CancelReq):
     return {"ok": True, "running": stop is not None}
 
 
-@app.post("/approve")
+@local.post("/approve")
 async def approve(req: ApproveReq):
     fut = pending.pop(req.id, None)
     if fut and not fut.done():
         fut.set_result((req.approved, req.always))
     return {"ok": True}
+
+
+# ---- Remote API (phone app) --------------------------------------------------
+
+class RunReq(BaseModel):
+    session_id: str
+    workspace: str
+    message: str
+    model: str | None = None
+    approval_mode: Literal["ask", "autoEdits"] = "ask"
+    allowed_commands: list[str] = []
+
+
+class SteerReq(BaseModel):
+    message: str
+
+
+@remote.get("/models")
+async def v1_models():
+    return list_models()
+
+
+@remote.get("/workspaces")
+async def v1_workspaces():
+    """The allowed roots and the project folders directly inside them."""
+    skip = {"node_modules", "venv", "__pycache__"}
+    folders = []
+    for r in allowed_roots():
+        if r.is_dir():
+            folders.append({"name": r.name or str(r), "path": str(r)})
+            folders += [{"name": f"{r.name}/{d.name}", "path": str(d)} for d in sorted(r.iterdir())
+                        if d.is_dir() and not d.name.startswith(".") and d.name not in skip][:200]
+    return {"folders": folders}
+
+
+@remote.post("/runs")
+async def v1_start(req: RunReq):
+    """Start a run, or, if one is already going in this session, steer it with the new message."""
+    workspace = check_workspace(req.workspace, remote=True)
+    if runs.steer(req.session_id, req.message):
+        return {"steered": True, "next_seq": runs.get(req.session_id).next_seq}
+    s = runs.start(req.session_id, workspace=workspace, user_text=req.message, model=req.model,
+                   approval_mode=req.approval_mode, allowed_commands=req.allowed_commands)
+    return {"steered": False, "next_seq": s.next_seq}
+
+
+@remote.get("/sessions/{session_id}")
+async def v1_session(session_id: str):
+    s = runs.get(session_id)
+    return {"active": s.active, "first_seq": s.base, "next_seq": s.next_seq}
+
+
+@remote.get("/sessions/{session_id}/events")
+async def v1_events(session_id: str, after: int = 0):
+    """Server-sent events from sequence number `after` on; replays what was missed, then follows live."""
+    s = runs.get(session_id)
+
+    async def stream():
+        async for ev in s.follow(after):
+            yield ": ping\n\n" if ev is None else f"data: {json.dumps(ev)}\n\n"
+        yield f"data: {json.dumps({'type': 'idle', 'seq': s.next_seq})}\n\n"
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@remote.post("/sessions/{session_id}/steer")
+async def v1_steer(session_id: str, req: SteerReq):
+    return {"ok": runs.steer(session_id, req.message)}
+
+
+@remote.post("/sessions/{session_id}/cancel")
+async def v1_cancel(session_id: str):
+    return {"ok": True, "running": runs.cancel(session_id)}
+
+
+@remote.post("/approve")
+async def v1_approve(req: ApproveReq):
+    return await approve(req)
+
+
+app.include_router(local)
+app.include_router(remote)
+
+
+@app.get("/")
+async def root():
+    return RedirectResponse("/app/")
+
+
+# The phone app: plain files, no secrets in them (the API behind it needs the token).
+app.mount("/app", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="app")

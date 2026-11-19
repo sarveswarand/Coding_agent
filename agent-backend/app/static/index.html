@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<title>OrgAI Voice</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <select id="workspace" aria-label="Project folder"></select>
+  <button id="settingsBtn" aria-label="Settings">⚙</button>
+</header>
+
+<div id="settings" hidden>
+  <label>Server token <input id="tokenInput" type="password" autocomplete="off"></label>
+  <label><input id="autoEdits" type="checkbox"> Apply file edits without asking (commands still ask)</label>
+  <label><input id="speakToggle" type="checkbox" checked> Speak replies</label>
+  <button id="saveSettings">Save</button>
+  <button id="newChat">New conversation</button>
+</div>
+
+<main id="log" aria-live="polite"></main>
+
+<div id="approval" hidden>
+  <div id="approvalTitle"></div>
+  <pre id="approvalPreview"></pre>
+  <div class="row">
+    <button id="approveBtn" class="ok">Approve</button>
+    <button id="alwaysBtn">Always</button>
+    <button id="rejectBtn" class="bad">Reject</button>
+  </div>
+</div>
+
+<footer>
+  <div id="status">Idle</div>
+  <form id="form">
+    <input id="text" placeholder="Type, or tap the mic and talk" autocomplete="off">
+    <button type="submit" id="sendBtn" aria-label="Send">➤</button>
+  </form>
+  <div class="row">
+    <button id="mic" class="mic" aria-label="Talk">🎤 Talk</button>
+    <button id="stopBtn" class="bad" hidden>■ Stop</button>
+  </div>
+</footer>
+<script src="app.js"></script>
+</body>
+</html>
