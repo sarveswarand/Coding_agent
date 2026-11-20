@@ -18,6 +18,8 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.parse
+import webbrowser
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -347,6 +349,44 @@ async def cancel_shutdown_action(ctx: Ctx, text: str) -> Result:
     code = await _run(["shutdown", "/a"])
     return Result("Shutdown cancelled." if code == 0 else "Nothing was scheduled to shut down.")
 
+
+# ---- searching the web in the browser ----------------------------------------------------------
+
+SEARCH_LEAD = re.compile(
+    r"^\W*(?:please\s+)?(?:search|google|look\s*up)\b"
+    r"(?:\s+(?:(?:on|in)\s+)?(?:google|the\s+web|the\s+internet|online|chrome|edge|the\s+browser))?"
+    r"(?:\s+for)?\s+(?P<q>.+?)\W*$", re.I)
+SEARCH_TAIL = re.compile(r"\s+(?:on|in|using|with)\s+(?:google|chrome|edge|the\s+web|the\s+internet|the\s+browser|online)\W*$", re.I)
+SAID_WEB = re.compile(r"\b(google|the web|internet|online|chrome|edge|browser)\b", re.I)
+CODE_WORDS = re.compile(r"\b(code|codebase|repo|repository|project|file|files|folder|function|class|method|variable|"
+                        r"component|endpoint|route|module|import|error|errors|bug|bugs|test|tests|todo|usages?|references|"
+                        r"where|how|why|defined|used|implemented)\b", re.I)
+CODE_SHAPE = re.compile(r"[_/\\]|\w\.\w|[a-z][A-Z]")  # snake_case, paths, dotted names, camelCase
+BARE_SEARCH_MAX_WORDS = 4  # "search for X" with nothing about the web: only short, non-code-looking X goes to the browser
+
+
+@action("web_search", r"^\W*(?:please\s+)?(search|google|look\s*up)\b", 14)
+async def web_search_action(ctx: Ctx, text: str) -> Result | None:
+    """Search Google in the browser. "search for Sundar Pichai" or "google X" does; a request that
+    looks about the code ("search for where the token is validated") stays a prompt for the agent,
+    unless the sentence says google/the web/chrome."""
+    m = SEARCH_LEAD.match(text)
+    query = SEARCH_TAIL.sub("", m.group("q")).strip() if m else ""
+    if not query:
+        return None
+    if not SAID_WEB.search(text) and (len(query.split()) > BARE_SEARCH_MAX_WORDS
+                                       or CODE_WORDS.search(query) or CODE_SHAPE.search(query)):
+        return None
+    apps = app_list.load_apps()
+    browser = apps.get("edge") if re.search(r"\bedge\b", text, re.I) else apps.get("chrome")
+    url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(query)
+    if browser and browser.cmd:
+        _launch([*browser.cmd, url])  # a program path and one URL argument: no shell involved
+        where = browser.label
+    else:
+        webbrowser.open(url)
+        where = "your browser"
+    return Result(f"Searching Google for {query} in {where}.")
 
 
 @action("switch_project", r"\b(switch|change|go|use|select|work|move|set)\b", 10)
