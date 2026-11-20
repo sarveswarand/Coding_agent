@@ -9,3 +9,4 @@ usage.jsonl
 bench/results/
 .cli_sessions.json
 apps.json
+sites.json

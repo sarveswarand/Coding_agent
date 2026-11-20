@@ -259,6 +259,8 @@ async def open_claude_action(ctx: Ctx, text: str) -> Result:
 @action("open_vscode", rf"\b(open|launch|start|bring up)\b.{{0,40}}\b({VSCODE}|folder|project|repo|repository)\b"
                        r"|^\s*(open|launch)\b", 10)
 async def open_vscode_action(ctx: Ctx, text: str) -> Result | None:
+    if DOMAIN.search(text.lower().replace(" dot ", ".")):
+        return None  # "open github dot com" is a website, even if a project folder is called Github
     target, candidates = find_project(text, list_projects())
     if candidates:
         return _ambiguous(candidates)
@@ -289,10 +291,102 @@ async def _run(args: list[str]) -> int:
     return await asyncio.to_thread(go)
 
 
+# ---- opening websites (in the browser, not through the agent) -------------------------------------
+
+SITES_FILE = Path(__file__).resolve().parent.parent / "sites.json"
+# (spoken names, label, address). "inbox" and "my email" mean Gmail unless sites.json says otherwise.
+DEFAULT_SITES = [
+    (("gmail", "inbox", "my email", "my mail"), "Gmail", "https://mail.google.com/mail/u/0/#inbox"),
+    (("youtube",), "YouTube", "https://www.youtube.com/"),
+    (("google calendar", "calendar"), "Google Calendar", "https://calendar.google.com/"),
+    (("google drive", "drive"), "Google Drive", "https://drive.google.com/"),
+    (("google maps", "maps"), "Google Maps", "https://www.google.com/maps"),
+    (("linkedin",), "LinkedIn", "https://www.linkedin.com/"),
+    (("whatsapp web", "whatsapp"), "WhatsApp Web", "https://web.whatsapp.com/"),
+    (("stack overflow", "stackoverflow"), "Stack Overflow", "https://stackoverflow.com/"),
+]
+DOMAIN = re.compile(r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|in|dev|ai|app|edu|gov|co)\b(?:/[^\s]*)?")
+SAME_TAB = re.compile(r"\b(same|this|current|existing)\s+tab\b", re.I)
+SITE_REQUEST = r"^\W*(?:please\s+)?(open|go to|pull up|bring up|launch|take me to|navigate to)\b"
+
+
+def _sites() -> list[tuple[tuple[str, ...], str, str]]:
+    """sites.json entries first (so they win), then the defaults.
+    Format: {"sites": {"outlook": {"label": "Outlook", "url": "https://outlook.office.com/mail/", "names": ["outlook", "inbox"]}}}"""
+    mine = []
+    try:
+        for key, spec in json.loads(SITES_FILE.read_text(encoding="utf-8")).get("sites", {}).items():
+            url = str(spec.get("url", ""))
+            if url.startswith(("https://", "http://")):
+                mine.append((tuple(n.lower() for n in spec.get("names", [key])), spec.get("label", key), url))
+    except (OSError, ValueError, AttributeError):
+        pass
+    return mine + DEFAULT_SITES
+
+
+def _find_site(low: str) -> tuple[str, str] | None:
+    """(label, address) of the site named in the (lower-case) sentence: the longest spoken name wins,
+    or a plain domain like 'github.com' ("github dot com" is understood too)."""
+    best: tuple[int, str, str] | None = None
+    for names, label, url in _sites():
+        for n in names:
+            if re.search(rf"\b{re.escape(n)}\b", low) and (best is None or len(n) > best[0]):
+                best = (len(n), label, url)
+    if best:
+        return best[1], best[2]
+    m = DOMAIN.search(low)
+    return (m.group(0).split("/")[0], "https://" + m.group(0)) if m else None
+
+
+@action("open_site", SITE_REQUEST, 12)
+async def open_site_action(ctx: Ctx, text: str) -> Result | None:
+    """"open my gmail inbox in chrome", "go to youtube", "open github dot com". Claude Code can't drive a
+    browser, so this opens the address itself: in a new Chrome tab, or in the tab in front if you say
+    "in the same tab" (it types the address into that tab's address bar)."""
+    low = text.lower().replace(" dot ", ".")
+    if CODE_WORDS.search(low) and not SAID_WEB.search(low):
+        return None  # "open the drive folder", "open the maps component": about the project
+    site = _find_site(low)
+    if site is None:
+        return None
+    label, url = site
+    if SAME_TAB.search(text):
+        if desktop.supported() and desktop.foreground_program() in ("chrome.exe", "msedge.exe"):
+            desktop.hotkey("ctrl", "l")
+            await asyncio.sleep(0.3)
+            desktop.type_text(url)
+            await asyncio.sleep(0.2)
+            desktop.press("enter")
+            return Result(f"Opened {label} in this tab.")
+        note = " Your browser isn't in front, so it's a new tab."
+    else:
+        note = ""
+    apps = app_list.load_apps()
+    browser = apps.get("edge") if re.search(r"\bedge\b", low) else apps.get("chrome")
+    if browser and browser.cmd:
+        _launch([*browser.cmd, url])  # a program path and one address: no shell involved
+        where = browser.label
+    else:
+        webbrowser.open(url)
+        where = "your browser"
+    return Result(f"Opened {label} in {where}.{note}")
+
+
+def _leftover_words(text: str, app) -> list[str]:
+    """Words in the request that are neither filler nor part of the app's name: "open my inbox in chrome"
+    has "inbox" left over, so it isn't just "open Chrome"."""
+    known = set(app_list.FILLER) | {"in", "on", "at", "with", "window", "new", "tab"}
+    for n in app.names():
+        known |= set(re.findall(r"[a-z0-9]+", n.lower()))
+    return [w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in known]
+
+
 @action("open_app", r"^\s*(open|launch|start|run)\b", 8)
 async def open_app_action(ctx: Ctx, text: str) -> Result | None:
     app = app_list.find_app(text, app_list.load_apps())
     if app is not None and app.cmd:
+        if _leftover_words(text, app):
+            return None  # it asks for more than the app itself; don't quietly do only part of it
         _launch(app.cmd)
         return Result(f"Opened {app.label}.")
     # Not on the short list: anything with a Start Menu shortcut can still be opened by name ("open MySQL
@@ -330,7 +424,8 @@ async def lock_action(ctx: Ctx, text: str) -> Result:
     async def do() -> str:
         await _run(["rundll32.exe", "user32.dll,LockWorkStation"])
         return "Locked."
-    return Result("Lock this PC? Say yes to confirm.", confirm=Confirm(do))
+    return Result("Lock this PC? I can't unlock it from your phone, so you'd have to be at it. Say yes to confirm.",
+                  confirm=Confirm(do))
 
 
 def _power_action(verb: str, flag: str, doing: str):

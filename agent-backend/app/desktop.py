@@ -112,3 +112,13 @@ def screenshot_png(max_width: int = 1024) -> bytes:
     out = io.BytesIO()
     img.convert("RGB").save(out, format="PNG")
     return out.getvalue()
+
+
+def hotkey(modifier: str, key: str) -> None:
+    """Press a shortcut such as ctrl+l. Only the modifiers and letters below, and only used by the
+    assistant itself (for example to reach a browser's address bar), never from free-form speech."""
+    mods = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10}
+    if modifier not in mods or len(key) != 1 or not key.isalpha():
+        raise ValueError("unsupported shortcut")
+    m, k = mods[modifier], ord(key.upper())
+    _send([(m, 0, 0), (k, 0, 0), (k, 0, KEYEVENTF_KEYUP), (m, 0, KEYEVENTF_KEYUP)])
