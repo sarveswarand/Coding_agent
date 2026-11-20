@@ -54,6 +54,7 @@ class Session:
         self.task: asyncio.Task | None = None
         self.inbox: asyncio.Queue = asyncio.Queue()
         self.workspace: str | None = None  # the folder the latest run worked in
+        self.confirm = None  # a risky voice action waiting for "yes" (see assistant.Confirm)
 
     @property
     def active(self) -> bool:

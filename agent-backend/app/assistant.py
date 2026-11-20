@@ -2,6 +2,10 @@
 Claude Code, switch project, list projects, report status). Anything not recognised here is a
 prompt for the coding agent.
 
+Anything that could lose work or be disruptive (closing an app, locking, shutting down) is not
+done straight away: the action returns a Result with a `confirm`, the assistant asks, and only a
+spoken "yes" within CONFIRM_TTL seconds runs it.
+
 Each command is an Action in the ACTIONS list. To add one, write an async function that takes
 (ctx, text) and returns a Result, or None if the sentence turned out not to be for it, and
 register it with @action. Folders are only ever taken from the AGENT_WORKSPACES allowlist.
@@ -12,10 +16,12 @@ import os
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from . import apps as app_list
 from . import local_llm
 from .security import allowed_roots
 
@@ -24,6 +30,9 @@ UNSAFE_PATH = re.compile(r'[&|<>^%"\r\n]')  # code is a .cmd on Windows, so cmd.
 GENERIC_WORDS = {"code", "project", "projects", "folder", "folders", "repo", "repos", "claude", "vscode",
                  "visual", "studio", "the", "this", "that", "app", "open", "please", "to", "in", "for"}
 VSCODE = r"(?:v\s?s\s?code|vscode|visual studio code)"
+CONFIRM_TTL = 60  # seconds a question stays open
+YES = re.compile(r"^\W*(yes|yeah|yep|yup|sure|ok|okay|confirm|do it|go ahead|proceed)\b", re.I)
+NO = re.compile(r"^\W*(no|nope|cancel|never ?mind|don't|do not|stop|abort)\b", re.I)
 
 
 @dataclass
@@ -44,9 +53,17 @@ class Ctx:
 
 
 @dataclass
+class Confirm:
+    """A risky action waiting for the user's "yes"."""
+    do: Callable[[], Awaitable[str]]  # runs it and returns what to say
+    made_at: float = field(default_factory=time.monotonic)
+
+
+@dataclass
 class Result:
     reply: str                      # what to say
     project: Project | None = None  # set when the active project changed
+    confirm: Confirm | None = None  # set when the reply is a question that "yes" will carry out
 
 
 # ---- projects -----------------------------------------------------------------------
@@ -172,11 +189,23 @@ def action(name: str, pattern: str, max_words: int = 12):
 
 async def handle(text: str, ctx: Ctx) -> Result | None:
     """The first action that recognises the sentence and takes it, or None: it's a prompt for the agent."""
+    waiting = getattr(ctx.session, "confirm", None)
+    if waiting:
+        ctx.session.confirm = None  # a question is answered once, or dropped by saying something else
+        short = len(text.split()) <= 4
+        if short and YES.search(text):
+            if time.monotonic() - waiting.made_at > CONFIRM_TTL:
+                return Result("That question timed out. Ask me again.")
+            return Result(await waiting.do())
+        if short and NO.search(text):
+            return Result("Okay, cancelled.")
     n = len(text.split())
     for a in ACTIONS:
         if n <= a.max_words and a.pattern.search(text):
             result = await a.run(ctx, text)
             if result is not None:
+                if result.confirm:
+                    ctx.session.confirm = result.confirm
                 return result
     return None
 
@@ -239,6 +268,80 @@ async def open_vscode_action(ctx: Ctx, text: str) -> Result | None:
     if err := open_vscode(target.path):
         return Result(err)
     return Result(f"Opened {target.spoken} in VS Code.", project=target if changed else None)
+
+
+# ---- apps and the computer: opening is immediate, closing/locking/shutting down asks first ----
+
+WINDOWS_ONLY = "That only works on Windows."
+PC_WORDS = r"(pc|computer|laptop|machine|system)"
+
+
+async def _run(args: list[str]) -> int:
+    def go() -> int:
+        return subprocess.run(args, capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).returncode
+    return await asyncio.to_thread(go)
+
+
+@action("open_app", r"^\s*(open|launch|start|run)\b", 8)
+async def open_app_action(ctx: Ctx, text: str) -> Result | None:
+    app = app_list.find_app(text, app_list.load_apps())
+    if app is None or not app.cmd:
+        return None  # not an allowed app, so it falls through: it may be a prompt for the agent
+    _launch(app.cmd)
+    return Result(f"Opened {app.label}.")
+
+
+@action("close_app", r"^\s*(close|quit|exit)\b", 8)
+async def close_app_action(ctx: Ctx, text: str) -> Result | None:
+    app = app_list.find_app(text, app_list.load_apps())
+    if app is None:
+        return None
+    if not app.process:
+        return Result(f"I don't close {app.label}.")
+    if os.name != "nt":
+        return Result(WINDOWS_ONLY)
+
+    async def do() -> str:
+        code = await _run(["taskkill", "/IM", app.process])  # no /F: the app may ask to save first
+        return f"Closed {app.label}." if code == 0 else f"{app.label} isn't running."
+    return Result(f"Close {app.label}? Say yes to confirm.", confirm=Confirm(do))
+
+
+@action("lock", rf"\block\b.{{0,15}}\b{PC_WORDS}\b|\block (the )?screen\b", 6)
+async def lock_action(ctx: Ctx, text: str) -> Result:
+    if os.name != "nt":
+        return Result(WINDOWS_ONLY)
+
+    async def do() -> str:
+        await _run(["rundll32.exe", "user32.dll,LockWorkStation"])
+        return "Locked."
+    return Result("Lock this PC? Say yes to confirm.", confirm=Confirm(do))
+
+
+def _power_action(verb: str, flag: str, doing: str):
+    async def run(ctx: Ctx, text: str) -> Result:
+        if os.name != "nt":
+            return Result(WINDOWS_ONLY)
+
+        async def do() -> str:
+            await _run(["shutdown", flag, "/t", "30"])
+            return f"{doing} in 30 seconds. Say cancel shutdown to stop it."
+        return Result(f"{verb} this PC? You won't be able to control it from here until it's back on. Say yes to confirm.",
+                      confirm=Confirm(do))
+    return run
+
+
+action("shutdown", rf"\b(shut ?down|power off|turn off)\b.{{0,15}}\b{PC_WORDS}\b", 8)(_power_action("Shut down", "/s", "Shutting down"))
+action("restart", rf"\b(restart|reboot)\b.{{0,15}}\b{PC_WORDS}\b", 8)(_power_action("Restart", "/r", "Restarting"))
+
+
+@action("cancel_shutdown", r"\bcancel\b.{0,12}\b(shut ?down|restart|reboot)\b", 6)
+async def cancel_shutdown_action(ctx: Ctx, text: str) -> Result:
+    if os.name != "nt":
+        return Result(WINDOWS_ONLY)
+    code = await _run(["shutdown", "/a"])
+    return Result("Shutdown cancelled." if code == 0 else "Nothing was scheduled to shut down.")
+
 
 
 @action("switch_project", r"\b(switch|change|go|use|select|work|move|set)\b", 10)

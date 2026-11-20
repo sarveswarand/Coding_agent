@@ -135,6 +135,9 @@ The phone's voice layer never uses a cloud API key: its own thinking (status sum
 - **"what's happening?"** (also "status", "are you done?"): a short spoken update, even mid-run.
 - **"stop"**: cancels the run. **"yes"/"no"**: answers an approval.
 
+- **"open Chrome"**, **"open Notepad"**, **"open the calculator"** and other apps on your list: opens them straight away. The list is short and fixed (found on this PC, plus anything you add in `agent-backend/apps.json`; see `apps.example.json`). A name that isn't on it is treated as a prompt for the agent, never launched.
+- **Risky things ask first**: **"close Chrome"**, **"lock my PC"**, **"shut down my PC"**, **"restart my PC"**. The assistant asks, and only a spoken or typed "yes" within a minute does it ("no", or saying anything else, drops it). Shutdown and restart wait 30 seconds, and **"cancel shutdown"** stops them. Closing is polite (apps can ask to save first).
+
 Projects are the folders directly inside the ones you allowed with `pair --workspace`; nothing outside them can be opened. New commands are small functions registered with `@action` in `app/assistant.py`.
 
 Limit: VS Code only lets other programs open the Claude Code panel (and optionally prefill a prompt). It can't be typed into or read from outside, so prompts spoken to the phone run through the Claude Code CLI on that same conversation, and the panel shows that conversation when opened.

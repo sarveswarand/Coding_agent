@@ -1,0 +1,10 @@
+{
+  "apps": {
+    "spotify": {
+      "label": "Spotify",
+      "cmd": "C:\\Users\\YOU\\AppData\\Roaming\\Spotify\\Spotify.exe",
+      "aliases": ["music"],
+      "process": "Spotify.exe"
+    }
+  }
+}
