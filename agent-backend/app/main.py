@@ -147,7 +147,9 @@ class RunReq(BaseModel):
     session_id: str
     workspace: str
     message: str
-    mode: Literal["builtin", "claude"] = "builtin"  # which agent does the work
+    # "commands": voice commands only, nothing is ever sent to an agent on its own. Claude Code is used only when
+    # you open it in VS Code and tell the assistant what to put there. "builtin"/"claude" run an agent headlessly.
+    mode: Literal["commands", "builtin", "claude"] = "commands"
     model: str | None = None
     approval_mode: Literal["ask", "autoEdits"] = "ask"
     allowed_commands: list[str] = []
@@ -183,6 +185,8 @@ async def v1_start(req: RunReq):
     if runs.steer(req.session_id, req.message):
         return {"steered": True, "next_seq": runs.get(req.session_id).next_seq}
     model = None
+    if req.mode == "commands":
+        raise HTTPException(400, "Commands-only mode doesn't start agent runs.")
     if req.mode == "claude":
         if not cli_runner.available():
             raise HTTPException(503, "Claude Code isn't installed on this PC (set CLAUDE_BIN to its path).")
@@ -203,6 +207,10 @@ async def v1_say(req: RunReq):
     s = runs.get(req.session_id)
     result = await assistant.handle(
         req.message, assistant.Ctx(workspace, s, cli_runner.session_for(req.session_id)))
+    if result is None and req.mode == "commands":
+        # Not a command, and in this mode nothing is passed on to an agent behind your back.
+        result = assistant.Result("I didn't understand that as a command. To use Claude Code, say open Claude Code, "
+                                  "then tell Claude to, and what you want.")
     if result is None:
         return {**await v1_start(req), "handled": False, "active": True}
     s.emit({"type": "said", "text": req.message})

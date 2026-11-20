@@ -172,7 +172,7 @@ async function send(text) {
   try {
     // the server decides: a command for the assistant (open Claude Code, what's happening?) or a prompt for the agent
     const r = await post("/say", {
-      session_id: sessionId, workspace, message: text, mode: store.get("mode", "claude"),
+      session_id: sessionId, workspace, message: text, mode: store.get("agentMode", "commands"),
       approval_mode: store.get("autoEdits") === "1" ? "autoEdits" : "ask",
     });
     running = r.handled ? r.active : true;
@@ -320,14 +320,14 @@ $("settingsBtn").addEventListener("click", () => { $("settings").hidden = !$("se
 $("saveSettings").addEventListener("click", () => {
   if ($("tokenInput").value.trim()) { token = $("tokenInput").value.trim(); store.set("token", token); }
   store.set("autoEdits", $("autoEdits").checked ? "1" : "0");
-  store.set("mode", $("mode").value);
+  store.set("agentMode", $("mode").value);
   store.set("speak", $("speakToggle").checked ? "1" : "0");
   $("settings").hidden = true; $("tokenInput").value = ""; loadWorkspaces(); resume();
 });
 $("newChat").addEventListener("click", () => { sessionId = newSession(); cursor = 0; liveFrom = 0; log.innerHTML = ""; running = false; $("settings").hidden = true; });
 
 $("autoEdits").checked = store.get("autoEdits") === "1";
-$("mode").value = store.get("mode", "claude");
+$("mode").value = store.get("agentMode", "commands");
 $("speakToggle").checked = store.get("speak", "1") === "1";
 if (!token) $("settings").hidden = false;
 else { loadWorkspaces(); resume(); }

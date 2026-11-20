@@ -152,13 +152,29 @@ def open_vscode(path: str | None) -> str | None:
     return None
 
 
-async def open_claude_panel(claude_session: str | None) -> str | None:
+CLAUDE_URL = "vscode://anthropic.claude-code/open"
+MAX_URL_CHARS = 1800  # Windows hands longer addresses to programs unreliably
+
+
+async def open_claude_panel(claude_session: str | None, prompt: str | None = None) -> str | None:
+    """Show the Claude Code panel in VS Code. With `prompt`, a new conversation opens with that text in its
+    input box; it is only placed there, never sent (the extension doesn't send it either)."""
     code = _code_cli()
     if not code:
         return "I couldn't find VS Code on this PC."
+    params = []
+    if prompt:
+        params.append("prompt=" + urllib.parse.quote(prompt, safe=""))
+    elif claude_session:
+        params.append(f"session={claude_session}")
+    url = CLAUDE_URL + ("?" + "&".join(params) if params else "")
+    if len(url) > MAX_URL_CHARS:
+        return "That's too long to put in the box in one go. Say it shorter."
     await asyncio.sleep(2.5)  # let the window come up before the panel is asked for
-    _launch([code, "--open-url", "vscode://anthropic.claude-code/open"
-             + (f"?session={claude_session}" if claude_session else "")])
+    if os.name == "nt":
+        os.startfile(url)  # the vscode:// address goes straight to VS Code: no shell, no .cmd re-reading it
+    else:
+        _launch([code, "--open-url", url])
     return None
 
 
@@ -183,9 +199,12 @@ class Action:
 ACTIONS: list[Action] = []
 
 
-def action(name: str, pattern: str, max_words: int = 12):
+def action(name: str, pattern: str, max_words: int = 12, first: bool = False):
+    """Register a command. `first=True` puts it ahead of the others, for commands that carry free text
+    (like "tell Claude to fix the status page") which a keyword in that text must not hijack."""
     def register(fn):
-        ACTIONS.append(Action(name, re.compile(pattern, re.I), max_words, fn))
+        a = Action(name, re.compile(pattern, re.I), max_words, fn)
+        ACTIONS.insert(0, a) if first else ACTIONS.append(a)
         return fn
     return register
 
@@ -238,11 +257,64 @@ async def status_action(ctx: Ctx, text: str) -> Result:
     return Result(await status(ctx.session))
 
 
-@action("open_claude", r"\b(open|launch|start|bring up|show)\b.{0,30}\bclaude\b", 12)
+SEND_TTL = 180  # seconds after filling the box during which "send it" is accepted
+SEND_SUFFIX = re.compile(r"[\s,.]*(?:and\s+|then\s+)?(?:send|submit)(?:\s+(?:it|that))?\W*$|"
+                         r"[\s,.]*(?:and\s+|then\s+)?(?:press|hit)\s+enter\W*$", re.I)
+THERE_SUFFIX = re.compile(r"\s+(?:there|in there|in it|into it|in the box|in the chat)\W*$", re.I)
+INSTRUCTION = re.compile(r"\b(?:and|then)\s+(?:type|ask|tell|say|write|prompt|enter)\s+(?:it\s+|claude\s+)?(?:to\s+)?(?P<q>.+)$", re.I)
+
+
+META_LEAD = re.compile(r"^(?:you\s+|it\s+|claude\s+)?(?:to\s+)?open\b.*?\bclaude(?:\s+code)?\b\s*(?:and|then)\s+"
+                       r"(?:type|enter|say|write|ask|tell|prompt)\s+(?:it\s+|claude\s+)?(?:to\s+)?(?P<q>.+)$", re.I)
+
+
+def _clean_instruction(q: str) -> tuple[str, bool]:
+    """(the text to put in Claude Code's box, whether the sentence also said to send it)."""
+    meta = META_LEAD.match(q)  # "tell you to open Claude Code and type X": X is the instruction, the rest is how you asked
+    if meta:
+        q = meta.group("q")
+    send = bool(SEND_SUFFIX.search(q))
+    q = SEND_SUFFIX.sub("", q) if send else q
+    return THERE_SUFFIX.sub("", q).strip(" .,"), send
+
+
+async def _put_in_claude(ctx: Ctx, prompt: str, send: bool, target: Project | None = None) -> Result:
+    """Open VS Code on the project, show Claude Code there with `prompt` in its box, and arm "send it".
+    Nothing is sent unless the user says to (or said so in the same sentence)."""
+    path = target.path if target else ctx.workspace
+    changed = target is not None and not _same_folder(target.path, ctx.workspace)
+    if changed and (busy := _busy_reply(ctx)):
+        return busy
+    if err := open_vscode(path):
+        return Result(err)
+    if err := await open_claude_panel(None, prompt=prompt):
+        return Result(err)
+    ctx.session.claude_armed = time.monotonic()
+    if send:
+        await asyncio.sleep(1.5)
+        if desktop.supported() and desktop.foreground_program() == "code.exe":
+            desktop.press("enter")
+            ctx.session.claude_armed = None
+            return Result("Put it in Claude Code in VS Code and sent it. Say what's on my screen to see how it's going.",
+                          project=target if changed else None)
+        return Result("Put it in Claude Code's box, but VS Code isn't in front, so I didn't send it. Say send it when it is.",
+                      project=target if changed else None)
+    return Result("Put it in Claude Code's box in VS Code. Say send it to submit, or what's on my screen to check it first.",
+                  project=target if changed else None)
+
+
+@action("open_claude", r"\b(open|launch|start|bring up|show)\b.{0,30}\bclaude\b", 40, first=True)
 async def open_claude_action(ctx: Ctx, text: str) -> Result:
-    target, candidates = find_project(text, list_projects())
+    """"open Claude Code", or "open Claude Code and type fix the login bug" (the text is placed in its box)."""
+    m = INSTRUCTION.search(text)
+    head = text[:m.start()] if m else text  # a project name inside the instruction is part of the instruction
+    target, candidates = find_project(head, list_projects())
     if candidates:
         return _ambiguous(candidates)
+    if m:
+        prompt, send = _clean_instruction(m.group("q"))
+        if prompt:
+            return await _put_in_claude(ctx, prompt, send, target)
     path = target.path if target else ctx.workspace
     changed = target is not None and not _same_folder(target.path, ctx.workspace)
     if changed and (busy := _busy_reply(ctx)):
@@ -254,6 +326,40 @@ async def open_claude_action(ctx: Ctx, text: str) -> Result:
         return Result(err)
     return Result(f"Opened Claude Code in VS Code for {Path(path).name.replace('_', ' ')}.",
                   project=target if changed else None)
+
+
+CLAUDE_TELL = [
+    re.compile(r"^\W*(?:please\s+)?(?:tell|ask|prompt|have)\s+claude(?:\s+code)?\s+(?:to\s+)?(?P<q>.+)$", re.I),
+    re.compile(r"^\W*(?:please\s+)?claude(?:\s+code)?\s*[,:]\s*(?P<q>.+)$", re.I),
+    re.compile(r"^\W*(?:please\s+)?type\s+(?P<q>.+?)\s+(?:in|into|on)\s+(?:the\s+)?claude(?:\s+code)?"
+               r"(?:\s+(?:box|input|chat|panel))?\W*$", re.I),
+]
+
+
+@action("claude_prompt", r"^\W*(?:please\s+)?(tell|ask|prompt|have|claude|type)\b", 60, first=True)
+async def claude_prompt_action(ctx: Ctx, text: str) -> Result | None:
+    """"tell Claude to fix the login bug", "ask Claude why the build fails", "type X in Claude Code".
+    The only way text reaches Claude Code: it goes into the box in VS Code, and you say when to send it."""
+    for rx in CLAUDE_TELL:
+        m = rx.match(text)
+        if m:
+            prompt, send = _clean_instruction(m.group("q"))
+            return await _put_in_claude(ctx, prompt, send) if prompt else None
+    return None
+
+
+@action("send_it", r"^\W*(?:ok(?:ay)?\s+|now\s+)?(send|submit)\b(?:\s+(?:it|that|this|the prompt|the message))?\W*$", 6, first=True)
+async def send_it_action(ctx: Ctx, text: str) -> Result:
+    armed = getattr(ctx.session, "claude_armed", None)
+    if not armed or time.monotonic() - armed > SEND_TTL:
+        return Result("There's nothing waiting to send. Say tell Claude to, and what you want, first.")
+    if not desktop.supported():
+        return Result(WINDOWS_ONLY)
+    if desktop.foreground_program() != "code.exe":
+        return Result("VS Code isn't in front, so I won't press enter. Bring it to the front and say send it again.")
+    desktop.press("enter")
+    ctx.session.claude_armed = None
+    return Result("Sent. Say what's on my screen to see how it's going.")
 
 
 @action("open_vscode", rf"\b(open|launch|start|bring up)\b.{{0,40}}\b({VSCODE}|folder|project|repo|repository)\b"

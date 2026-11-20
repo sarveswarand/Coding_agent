@@ -55,6 +55,7 @@ class Session:
         self.inbox: asyncio.Queue = asyncio.Queue()
         self.workspace: str | None = None  # the folder the latest run worked in
         self.confirm = None  # a risky voice action waiting for "yes" (see assistant.Confirm)
+        self.claude_armed: float | None = None  # when a prompt was last placed in VS Code's Claude box (for "send it")
         self.background = 0  # slow assistant jobs (like looking at the screen) that will still post a reply
 
     @property
