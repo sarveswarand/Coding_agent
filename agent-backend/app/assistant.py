@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from . import apps as app_list
-from . import local_llm
+from . import desktop, local_llm
 from .security import allowed_roots
 
 SKIP_DIRS = {"node_modules", "venv", ".venv", "__pycache__"}
@@ -292,10 +292,18 @@ async def _run(args: list[str]) -> int:
 @action("open_app", r"^\s*(open|launch|start|run)\b", 8)
 async def open_app_action(ctx: Ctx, text: str) -> Result | None:
     app = app_list.find_app(text, app_list.load_apps())
-    if app is None or not app.cmd:
-        return None  # not an allowed app, so it falls through: it may be a prompt for the agent
-    _launch(app.cmd)
-    return Result(f"Opened {app.label}.")
+    if app is not None and app.cmd:
+        _launch(app.cmd)
+        return Result(f"Opened {app.label}.")
+    # Not on the short list: anything with a Start Menu shortcut can still be opened by name ("open MySQL
+    # Workbench"), but only with open/launch and only when the whole request is that app's name.
+    if re.match(r"^\W*(open|launch)\b", text, re.I) and os.name == "nt":
+        installed = app_list.find_installed(text)
+        if installed:
+            name, shortcut = installed
+            os.startfile(shortcut)  # exactly what double-clicking the shortcut does: no arguments, no shell
+            return Result(f"Opened {name}.")
+    return None  # not an app we know: it may be a prompt for the agent
 
 
 @action("close_app", r"^\s*(close|quit|exit)\b", 8)
@@ -387,6 +395,68 @@ async def web_search_action(ctx: Ctx, text: str) -> Result | None:
         webbrowser.open(url)
         where = "your browser"
     return Result(f"Searching Google for {query} in {where}.")
+
+
+WEB_TOPIC = re.compile(r"\b(weather|forecast|temperature|news|score|scores|stock price|exchange rate|time in)\b", re.I)
+QUESTION_LEAD = re.compile(r"^\W*(?:please\s+)?(?:(?:check|show|tell|give|get)(?:\s+me)?|what(?:'s|\s+is)|whats|how(?:'s|\s+is))\s+(?:the\s+)?", re.I)
+
+
+@action("web_question", r"^\W*(?:please\s+)?(check|show|tell|give|get|what|whats|how)\b", 10)
+async def web_question_action(ctx: Ctx, text: str) -> Result | None:
+    """"check the Chennai weather", "what's the IPL score": a question the web answers, so it opens in the browser."""
+    query = QUESTION_LEAD.sub("", text).strip(" ?.!")  # without "how's", "what is"...: those words aren't about code here
+    if not query or not WEB_TOPIC.search(query) or CODE_WORDS.search(query) or CODE_SHAPE.search(query):
+        return None
+    return await web_search_action(ctx, f"search for {query} on google")
+
+
+# ---- typing and keys, only into a browser or Notepad ----------------------------------------------
+
+TYPE_LEAD = re.compile(r"^\W*(?:please\s+)?type\s+(?P<s>.+?)\W*$", re.I)
+KEY_PRESS = re.compile(r"^\W*(?:please\s+)?(?:press|hit)\s+(?:the\s+)?(?P<k>enter|tab|escape|backspace)(?:\s+key)?\W*$", re.I)
+
+
+TYPE_CODEISH = re.compile(r"\b(check|checking|annotations?|hints?|hinting|safe|script|alias|def|declarations?)\b", re.I)
+
+
+def _typing_target() -> tuple[str | None, str | None]:
+    """(program in front, None) if typing there is allowed, else (program or None, reply explaining why not)."""
+    if not desktop.supported():
+        return None, WINDOWS_ONLY
+    front = desktop.foreground_program()
+    if front in desktop.type_targets():
+        return front, None
+    return front, (f"The window in front is {front or 'unknown'}, so I won't type there. "
+                   "Open Chrome or Notepad first.")
+
+
+@action("type_text", r"^\W*(?:please\s+)?type\b", 14)
+async def type_text_action(ctx: Ctx, text: str) -> Result | None:
+    m = TYPE_LEAD.match(text)
+    if not m:
+        return None
+    rest = m.group("s")
+    front, why_not = _typing_target()
+    if why_not:
+        # "type check the project" or "type annotations for this function" is an instruction for the agent,
+        # not keystrokes: only a short, plain phrase gets the "I won't type there" explanation.
+        if TYPE_CODEISH.search(rest) or CODE_WORDS.search(rest) or CODE_SHAPE.search(rest) or len(rest.split()) > 6:
+            return None
+        return Result(why_not)
+    desktop.type_text(rest)
+    return Result(f"Typed it into {front}. Say press enter to submit.")
+
+
+@action("press_key", r"^\W*(?:please\s+)?(press|hit)\b", 6)
+async def press_key_action(ctx: Ctx, text: str) -> Result | None:
+    m = KEY_PRESS.match(text)
+    if not m:
+        return None
+    front, why_not = _typing_target()
+    if why_not:
+        return Result(why_not)
+    desktop.press(m.group("k").lower())
+    return Result(f"Pressed {m.group('k').lower()}.")
 
 
 @action("switch_project", r"\b(switch|change|go|use|select|work|move|set)\b", 10)
