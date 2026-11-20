@@ -94,6 +94,8 @@ def _plain_status(lines: list[str], active: bool) -> str:
         started = [l for l in lines if l.startswith("The agent started")]
         return (started[-1].replace("The agent started: ", "It is working on this: ") if started
                 else "It is working on your request.")
+    if last.startswith("The agent started"):
+        return last.replace("The agent started: ", "It is not running now. The last step was: ")
     return last.replace("The agent said: ", "Last update: ")[:300] if last else "Nothing is running."
 
 
