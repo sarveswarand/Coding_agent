@@ -22,9 +22,11 @@ def local_model_id() -> str | None:
     return OLLAMA_PREFIX + name if name else None
 
 
-async def ask(system: str, user: str, max_tokens: int = 120, timeout: float = 15.0) -> str | None:
+async def ask(system: str, user: str, max_tokens: int = 120, timeout: float = 15.0,
+              schema: dict | None = None) -> str | None:
     """One short completion from the local model, or None if it isn't available or too slow
-    (callers then fall back to a plain answer, so a cold or busy model never blocks the voice)."""
+    (callers then fall back to a plain answer, so a cold or busy model never blocks the voice).
+    With `schema` (a JSON schema) the reply is forced to be JSON of that shape."""
     name = await asyncio.to_thread(local_model_name)
     if not name:
         return None
@@ -32,7 +34,7 @@ async def ask(system: str, user: str, max_tokens: int = 120, timeout: float = 15
         from ollama import AsyncClient
         res = await asyncio.wait_for(
             AsyncClient(host=OLLAMA_HOST).chat(
-                model=name, think=False, keep_alive="30m",
+                model=name, think=False, keep_alive="30m", format=schema,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                 options={"temperature": 0.2, "num_predict": max_tokens}),
             timeout)

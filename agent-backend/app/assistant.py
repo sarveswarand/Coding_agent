@@ -12,6 +12,7 @@ register it with @action. Folders are only ever taken from the AGENT_WORKSPACES 
 """
 import asyncio
 import difflib
+import json
 import os
 import re
 import shutil
@@ -54,8 +55,8 @@ class Ctx:
 
 @dataclass
 class Confirm:
-    """A risky action waiting for the user's "yes"."""
-    do: Callable[[], Awaitable[str]]  # runs it and returns what to say
+    """An action waiting for the user's "yes"."""
+    do: Callable[[], Awaitable["Result | str"]]  # runs it and returns what to say
     made_at: float = field(default_factory=time.monotonic)
 
 
@@ -196,18 +197,22 @@ async def handle(text: str, ctx: Ctx) -> Result | None:
         if short and YES.search(text):
             if time.monotonic() - waiting.made_at > CONFIRM_TTL:
                 return Result("That question timed out. Ask me again.")
-            return Result(await waiting.do())
+            done = await waiting.do()
+            return done if isinstance(done, Result) else Result(done)
         if short and NO.search(text):
             return Result("Okay, cancelled.")
     n = len(text.split())
+    result = None
     for a in ACTIONS:
         if n <= a.max_words and a.pattern.search(text):
             result = await a.run(ctx, text)
             if result is not None:
-                if result.confirm:
-                    ctx.session.confirm = result.confirm
-                return result
-    return None
+                break
+    if result is None:
+        result = await interpret(text, ctx)  # not a phrase we know: let the local model have a go
+    if result is not None and result.confirm:
+        ctx.session.confirm = result.confirm
+    return result
 
 
 def _ambiguous(candidates: list[Project]) -> Result:
@@ -356,6 +361,116 @@ async def switch_project_action(ctx: Ctx, text: str) -> Result | None:
     if busy := _busy_reply(ctx):
         return busy
     return Result(f"Switched to {target.spoken}.", project=target)
+
+
+# ---- loosely worded requests: the local model suggests, the user confirms -----------------------
+
+COMMAND_WORDS = re.compile(
+    r"\b(open|launch|start|pull up|bring up|fire up|boot|load|show me|take me|go to|get me|switch|jump|use|"
+    r"close|quit|exit|kill|get rid of|shut|lock|up to|how far|progress|doing|done yet)\b", re.I)
+ROUTE_MAX_WORDS = 10
+ROUTE_ACTIONS = ["open_app", "close_app", "open_project", "switch_project", "open_claude", "open_vscode",
+                 "lock", "list_projects", "status", "prompt"]
+ROUTE_SCHEMA = {"type": "object",
+                "properties": {"action": {"type": "string", "enum": ROUTE_ACTIONS}, "target": {"type": "string"}},
+                "required": ["action", "target"]}
+
+
+def _route_prompt(apps: dict, projects: list[Project]) -> str:
+    app_names = [a.label for a in apps.values() if a.cmd or a.process]
+    first_app = app_names[0] if app_names else "Notepad"
+    first_proj = projects[0].name if projects else "MyProject"
+    return (
+        'You route one spoken request for a PC assistant. Reply with JSON {"action": ..., "target": ...}.\n'
+        "Actions:\n"
+        "- open_app: open one of the apps (target = the app's name)\n"
+        "- close_app: close one of the apps (target = the app's name)\n"
+        "- open_project: open a project folder in VS Code (target = the project's name)\n"
+        "- switch_project: make a project the one being worked on (target = the project's name)\n"
+        "- open_claude: show the Claude Code panel (target = a project's name, or empty)\n"
+        "- open_vscode: open VS Code (target empty)\n"
+        "- lock: lock the PC (target empty)\n"
+        "- list_projects: read out the project names (target empty)\n"
+        "- status: say what the coding agent is doing now (target empty)\n"
+        "- prompt: anything else, especially anything about writing, changing, fixing, running, testing or "
+        "explaining code. When unsure, use prompt.\n"
+        f"Apps: {', '.join(app_names)}\n"
+        f"Projects: {', '.join(p.name for p in projects[:60])}\n"
+        "The target must be copied exactly from those lists, or be empty.\n"
+        "Examples:\n"
+        f'"fire up {first_app}" -> {{"action":"open_app","target":"{first_app}"}}\n'
+        f'"get rid of {first_app}" -> {{"action":"close_app","target":"{first_app}"}}\n'
+        f'"take me to {first_proj}" -> {{"action":"open_project","target":"{first_proj}"}}\n'
+        '"fix the login bug" -> {"action":"prompt","target":""}\n'
+        '"show me what you changed" -> {"action":"prompt","target":""}')
+
+
+async def interpret(text: str, ctx: Ctx) -> Result | None:
+    """For a short sentence no pattern recognised: ask the local model which action it means.
+    Whatever it picks is checked against the real app and project lists, and the user is asked
+    "Did you mean ...?" before anything happens. Anything doubtful stays a prompt for the agent."""
+    if len(text.split()) > ROUTE_MAX_WORDS:
+        return None
+    apps, projects = app_list.load_apps(), list_projects()
+    if not (COMMAND_WORDS.search(text) or app_list.find_app(text, apps) or find_project(text, projects)[0]):
+        return None  # nothing command-like: don't spend a model call (or a delay) on an ordinary prompt
+    raw = await local_llm.ask(_route_prompt(apps, projects), text, max_tokens=60, timeout=12, schema=ROUTE_SCHEMA)
+    if not raw:
+        return None
+    try:
+        action = json.loads(raw)["action"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return await _dispatch(action, text, ctx, apps, projects)
+
+
+async def _dispatch(action: str, text: str, ctx: Ctx, apps: dict, projects: list[Project]) -> Result | None:
+    """Turn the model's suggestion into an action, but only where the user's own words back it up.
+    A small model will happily pick some real-looking app or folder for "open the login page"."""
+    if action not in ROUTE_ACTIONS or action == "prompt":
+        return None
+    said_app = app_list.find_app(text, apps)      # an app the user actually named (or an alias of it)
+    said_proj, _ = find_project(text, projects)   # a project the user actually named
+    if said_app and said_app.cmd and action in ("open_app", "open_vscode", "open_project", "switch_project"):
+        action = "open_app"  # "fire up the text editor": they said Notepad, whatever the model picked
+    app = said_app if action in ("open_app", "close_app") else None
+    proj = said_proj if action in ("open_project", "switch_project", "open_claude") else None
+    if action == "open_vscode" and not re.search(VSCODE, text, re.I):
+        return None
+    if action == "open_claude" and "claude" not in text.lower():
+        return None
+    if action == "lock" and not re.search(r"\block|screen", text, re.I):
+        return None
+
+    # harmless to read out, or already asks for its own confirmation
+    if action == "list_projects":
+        return await list_projects_action(ctx, "")
+    if action == "status":
+        return await status_action(ctx, "")
+    if action == "lock":
+        return await lock_action(ctx, "")
+    if action == "close_app":
+        return await close_app_action(ctx, f"close {app.label}") if app else None
+
+    # everything else: say what was understood and wait for "yes"
+    if action == "open_app" and app and app.cmd:
+        what, run = f"open {app.label}", lambda: open_app_action(ctx, f"open {app.label}")
+    elif action == "open_project" and proj:
+        what, run = f"open the {proj.spoken} folder in VS Code", lambda: open_vscode_action(ctx, f"open the {proj.name} folder")
+    elif action == "switch_project" and proj:
+        what, run = f"switch to {proj.spoken}", lambda: switch_project_action(ctx, f"switch to {proj.name}")
+    elif action == "open_claude":
+        where = f" in {proj.name}" if proj else ""
+        what = "open Claude Code" + (f" for {proj.spoken}" if proj else "")
+        run = lambda: open_claude_action(ctx, f"open claude code{where}")
+    elif action == "open_vscode":
+        what, run = "open VS Code", lambda: open_vscode_action(ctx, "open vs code")
+    else:
+        return None  # the model named something that isn't on the lists
+
+    async def do() -> Result:
+        return (await run()) or Result("That didn't work.")
+    return Result(f"Did you mean: {what}? Say yes.", confirm=Confirm(do))
 
 
 # ---- "what's happening?" ----------------------------------------------------------------
