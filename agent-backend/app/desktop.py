@@ -114,11 +114,24 @@ def screenshot_png(max_width: int = 1024) -> bytes:
     return out.getvalue()
 
 
-def hotkey(modifier: str, key: str) -> None:
-    """Press a shortcut such as ctrl+l. Only the modifiers and letters below, and only used by the
-    assistant itself (for example to reach a browser's address bar), never from free-form speech."""
-    mods = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10}
-    if modifier not in mods or len(key) != 1 or not key.isalpha():
+MODIFIERS = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10}
+SPECIAL_KEYS = {"tab": 0x09, "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28, "pageup": 0x21,
+                "pagedown": 0x22, "home": 0x24, "end": 0x23, "f5": 0x74}
+
+
+def hotkey(*keys: str) -> None:
+    """Press a shortcut such as ("ctrl", "l") or ("ctrl", "shift", "tab"): any of ctrl/alt/shift, then one key
+    from a short list (a letter, a digit, or tab/arrows/page keys/F5). Used by the assistant's own commands
+    (the browser's address bar and tabs), never built from free-form speech."""
+    *mods, key = keys
+    if not all(m in MODIFIERS for m in mods) or not mods:
         raise ValueError("unsupported shortcut")
-    m, k = mods[modifier], ord(key.upper())
-    _send([(m, 0, 0), (k, 0, 0), (k, 0, KEYEVENTF_KEYUP), (m, 0, KEYEVENTF_KEYUP)])
+    if key in SPECIAL_KEYS:
+        vk = SPECIAL_KEYS[key]
+    elif len(key) == 1 and key.isalnum():
+        vk = ord(key.upper())
+    else:
+        raise ValueError("unsupported shortcut")
+    down = [(MODIFIERS[m], 0, 0) for m in mods]
+    up = [(MODIFIERS[m], 0, KEYEVENTF_KEYUP) for m in reversed(mods)]
+    _send(down + [(vk, 0, 0), (vk, 0, KEYEVENTF_KEYUP)] + up)

@@ -403,6 +403,7 @@ SITES_FILE = Path(__file__).resolve().parent.parent / "sites.json"
 # (spoken names, label, address). "inbox" and "my email" mean Gmail unless sites.json says otherwise.
 DEFAULT_SITES = [
     (("gmail", "inbox", "my email", "my mail"), "Gmail", "https://mail.google.com/mail/u/0/#inbox"),
+    (("google chat", "my chat", "chat page", "chat"), "Google Chat", "https://chat.google.com/"),
     (("youtube",), "YouTube", "https://www.youtube.com/"),
     (("google calendar", "calendar"), "Google Calendar", "https://calendar.google.com/"),
     (("google drive", "drive"), "Google Drive", "https://drive.google.com/"),
@@ -411,7 +412,7 @@ DEFAULT_SITES = [
     (("whatsapp web", "whatsapp"), "WhatsApp Web", "https://web.whatsapp.com/"),
     (("stack overflow", "stackoverflow"), "Stack Overflow", "https://stackoverflow.com/"),
 ]
-DOMAIN = re.compile(r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|in|dev|ai|app|edu|gov|co)\b(?:/[^\s]*)?")
+DOMAIN = re.compile(r"(?<![@\w.-])[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|in|dev|ai|app|edu|gov|co)\b(?:/[^\s]*)?")  # not the part after an @
 SAME_TAB = re.compile(r"\b(same|this|current|existing)\s+tab\b", re.I)
 SITE_REQUEST = r"^\W*(?:please\s+)?(open|go to|pull up|bring up|launch|take me to|navigate to)\b"
 
@@ -456,6 +457,10 @@ async def open_site_action(ctx: Ctx, text: str) -> Result | None:
     if site is None:
         return None
     label, url = site
+    ctx.session.last_site = (label, url)
+    email = _find_email(text)
+    if email:  # "open my inbox as me@work.com"
+        url, label = _with_account(url, email), f"{label} as {email}"
     if SAME_TAB.search(text):
         if desktop.supported() and desktop.foreground_program() in ("chrome.exe", "msedge.exe"):
             desktop.hotkey("ctrl", "l")
@@ -476,6 +481,137 @@ async def open_site_action(ctx: Ctx, text: str) -> Result | None:
         webbrowser.open(url)
         where = "your browser"
     return Result(f"Opened {label} in {where}.{note}")
+
+
+EMAIL = re.compile(r"[a-z0-9][a-z0-9._%+-]*@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}")
+
+
+def _find_email(text: str) -> str | None:
+    """An email address in the sentence, as typed or as speech recognition writes it
+    ("sarveswaran dot d at tringapps dot net")."""
+    t = f" {text.lower()} ".replace(" at the rate of ", "@").replace(" at ", "@")
+    t = re.sub(r"\s+dot\s+", ".", t)
+    t = re.sub(r"\s*@\s*", "@", t)
+    t = re.sub(r"(?<=[a-z0-9])\s*\.\s*(?=[a-z0-9])", ".", t)
+    m = EMAIL.search(t)
+    return m.group(0) if m else None
+
+
+def _with_account(url: str, email: str) -> str:
+    """The same Google page for a particular account, using Google's own `authuser` parameter. The account
+    has to be signed in to this browser already; if not, Google asks you to sign in."""
+    parts = urllib.parse.urlsplit(url)
+    host = parts.netloc.lower()
+    if not (host == "google.com" or host.endswith(".google.com")):
+        return url  # not a Google page: there's no account to pick
+    path = re.sub(r"/u/\d+/", "/", parts.path)  # Gmail's /u/0/ would override authuser
+    query = urllib.parse.parse_qsl(parts.query)
+    query = [(k, v) for k, v in query if k != "authuser"] + [("authuser", email)]
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, urllib.parse.urlencode(query), parts.fragment))
+
+
+@action("switch_account", r"\b(switch|change|use|sign in|log in|login)\b.{0,40}\b(account|gmail|google)\b|"
+                          r"\b(account|gmail|google)\b.{0,30}\b(to|as)\b", 16)
+async def switch_account_action(ctx: Ctx, text: str) -> Result | None:
+    """"switch the Google account to me@work.com": opens the Google page you were on (Gmail if none) as that account."""
+    email = _find_email(text)
+    if not email:
+        if re.search(r"\b(google|gmail)\b", text, re.I) and re.search(r"\b(switch|change)\b", text, re.I):
+            return Result("Which account? Say the whole email address.")
+        return None
+    last = getattr(ctx.session, "last_site", None) or ("Gmail", DEFAULT_SITES[0][2])
+    site = _find_site(text.lower()) or last
+    label, url = site
+    new_url = _with_account(url, email)
+    if new_url == url:
+        return Result(f"{label} isn't a Google page, so there's no Google account to switch.")
+    ctx.session.last_site = (label, url)
+    apps = app_list.load_apps()
+    browser = apps.get("edge") if re.search(r"\bedge\b", text, re.I) else apps.get("chrome")
+    if browser and browser.cmd:
+        _launch([*browser.cmd, new_url])
+        where = browser.label
+    else:
+        webbrowser.open(new_url)
+        where = "your browser"
+    return Result(f"Opened {label} as {email} in {where}. If that account isn't signed in there, Google will ask you to.")
+
+
+# ---- browser tabs and navigation: keyboard shortcuts for Chrome or Edge in front -------------------------
+
+NUMBER_WORDS = {"one": 1, "first": 1, "two": 2, "second": 2, "three": 3, "third": 3, "four": 4, "fourth": 4,
+                "five": 5, "fifth": 5, "six": 6, "sixth": 6, "seven": 7, "seventh": 7, "eight": 8, "eighth": 8}
+BROWSERS = ("chrome.exe", "msedge.exe")
+
+
+def _tab_shortcut(text: str) -> tuple[tuple[str, ...], str, bool] | None:
+    """(keys, what it does, needs confirmation) for a tab or navigation sentence, or None."""
+    low = text.lower()
+    if re.search(r"\bnext\s+tab\b", low):
+        return ("ctrl", "tab"), "Next tab.", False
+    if re.search(r"\b(previous|prior)\s+tab\b", low):
+        return ("ctrl", "shift", "tab"), "Previous tab.", False
+    if re.search(r"\b(re-?open|restore)\b.*\btab\b", low):
+        return ("ctrl", "shift", "t"), "Reopened the closed tab.", False
+    if re.search(r"\bnew\s+tab\b", low) and not re.search(r"\bnew\s+tab\s+page\b", low):
+        return ("ctrl", "t"), "New tab.", False
+    if re.search(r"\b(close|shut)\b.*\btab\b", low):
+        return ("ctrl", "w"), "Closed the tab.", True
+    m = re.search(r"\btab\s+(?:number\s+)?(\d|[a-z]+)\b|\b(first|second|third|fourth|fifth|sixth|seventh|eighth)\s+tab\b", low)
+    if m:
+        word = m.group(1) or m.group(2)
+        n = int(word) if word.isdigit() else NUMBER_WORDS.get(word)
+        if n and 1 <= n <= 8:
+            return ("ctrl", str(n)), f"Tab {n}.", False
+    if re.search(r"\blast\s+tab\b", low):
+        return ("ctrl", "9"), "The last tab.", False
+    if re.search(r"\b(go\s+back|back\s+a\s+page)\b", low):
+        return ("alt", "left"), "Back.", False
+    if re.search(r"\bgo\s+forward\b", low):
+        return ("alt", "right"), "Forward.", False
+    if re.search(r"\b(reload|refresh)\b", low):
+        return ("ctrl", "r"), "Reloaded.", False
+    return None
+
+
+@action("browser_tab", r"\btabs?\b|^\W*(go back|go forward|reload|refresh)\b", 8)
+async def browser_tab_action(ctx: Ctx, text: str) -> Result | None:
+    """"next tab", "go to tab 2", "new tab", "close this tab", "go back", "reload", and "open the existing
+    Chrome tab" (brings Chrome forward). Only acts when Chrome or Edge is, or can be brought, in front."""
+    if re.match(r"^\W*(press|hit|type)\b", text, re.I) or not desktop.supported():
+        return None  # "type new tab page" is typing, not a shortcut
+    low = text.lower()
+    bring_forward = re.search(r"\b(existing|already|current|same|open)\s+(?:\w+\s+)?(?:chrome\s+|edge\s+)?tab\b", low) \
+        and not re.search(r"\b(new|next|previous|close)\b", low) and not re.search(r"\btab\s+(number\s+)?\w+\b.*\d", low)
+    shortcut = _tab_shortcut(text)
+    if shortcut is None and not bring_forward:
+        return None
+    # The whole sentence must be the command: "add a new tab to the settings page" is about the code, not the browser.
+    known = (set(NUMBER_WORDS) | {"go", "to", "switch", "the", "a", "an", "please", "this", "current", "open", "next",
+             "previous", "prior", "new", "tab", "tabs", "close", "shut", "reopen", "re", "open", "restore", "closed",
+             "number", "last", "back", "forward", "reload", "refresh", "page", "chrome", "edge", "browser", "existing",
+             "already", "same", "one", "again"})
+    if [w for w in re.findall(r"[a-z]+", low) if w not in known]:
+        return None
+    front = desktop.foreground_program()
+    if front not in BROWSERS:  # try to bring the browser forward by starting it without an address (it just comes to the front)
+        browser = app_list.load_apps().get("chrome")
+        if browser and browser.cmd:
+            _launch(browser.cmd)
+            await asyncio.sleep(1.2)
+            front = desktop.foreground_program()
+    if front not in BROWSERS:
+        return Result(f"The browser isn't in front (it's {front or 'unknown'}), so I won't send keys. Say open Chrome first.")
+    if shortcut is None:
+        return Result("Chrome is in front.")
+    keys, reply, needs_confirm = shortcut
+    if needs_confirm:
+        async def do() -> str:
+            desktop.hotkey(*keys)
+            return reply
+        return Result("Close this tab? Anything unsaved on the page is lost. Say yes to confirm.", confirm=Confirm(do))
+    desktop.hotkey(*keys)
+    return Result(reply)
 
 
 def _leftover_words(text: str, app) -> list[str]:
