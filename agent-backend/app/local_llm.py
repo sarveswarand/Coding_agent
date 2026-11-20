@@ -44,6 +44,37 @@ async def ask(system: str, user: str, max_tokens: int = 120, timeout: float = 15
         return None
 
 
+VISION_HINTS = ("vl", "llava", "moondream", "minicpm-v", "gemma3", "llama3.2-vision")
+
+
+def vision_model_name() -> str | None:
+    """VISION_MODEL from .env, else the first installed Ollama model that can read images."""
+    explicit = os.environ.get("VISION_MODEL", "").strip()
+    if explicit:
+        return explicit.removeprefix(OLLAMA_PREFIX)
+    return next((n for n in _ollama_installed() if any(h in n.lower() for h in VISION_HINTS)), None)
+
+
+async def describe_image(png: bytes, prompt: str, timeout: float = 300.0) -> str | None:
+    """What the local vision model says about an image. The picture goes only to Ollama on this PC and is
+    never written to disk. None if there's no vision model or it fails or is too slow."""
+    name = await asyncio.to_thread(vision_model_name)
+    if not name:
+        return None
+    try:
+        from ollama import AsyncClient
+        res = await asyncio.wait_for(
+            AsyncClient(host=OLLAMA_HOST).chat(
+                model=name, keep_alive="30m",
+                messages=[{"role": "user", "content": prompt, "images": [png]}],
+                options={"temperature": 0.1, "num_predict": 220}),
+            timeout)
+        return (res["message"]["content"] or "").strip() or None
+    except Exception as e:
+        log.warning("vision model call failed: %s", repr(e))
+        return None
+
+
 async def warm_up() -> None:
     """Load the model into memory at startup so the first spoken status isn't slow."""
     await ask("Reply with one word.", "hi", max_tokens=2, timeout=300)

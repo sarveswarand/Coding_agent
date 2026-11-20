@@ -55,10 +55,26 @@ class Session:
         self.inbox: asyncio.Queue = asyncio.Queue()
         self.workspace: str | None = None  # the folder the latest run worked in
         self.confirm = None  # a risky voice action waiting for "yes" (see assistant.Confirm)
+        self.background = 0  # slow assistant jobs (like looking at the screen) that will still post a reply
 
     @property
     def active(self) -> bool:
         return self.task is not None and not self.task.done()
+
+    def spawn(self, work) -> None:
+        """Run a slow coroutine that returns a sentence, and post it as a spoken reply when it finishes.
+        The event stream stays open until then, so a phone that is waiting still gets it."""
+        self.background += 1
+
+        async def run() -> None:
+            try:
+                reply = await work
+            except Exception as e:
+                reply = f"That failed: {e}"
+            self.background -= 1
+            self.emit({"type": "voice", "text": reply, "speech": reply})
+
+        asyncio.create_task(run())
 
     @property
     def next_seq(self) -> int:
@@ -84,7 +100,7 @@ class Session:
             while i < self.next_seq:
                 yield self.log[i - self.base]
                 i += 1
-            if not self.active:
+            if not self.active and not self.background:
                 return
             try:
                 await asyncio.wait_for(news.wait(), KEEPALIVE_S)

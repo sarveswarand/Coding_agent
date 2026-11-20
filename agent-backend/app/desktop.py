@@ -98,3 +98,17 @@ def type_text(text: str) -> None:
 def press(key: str) -> None:
     vk = KEYS[key]
     _send([(vk, 0, 0), (vk, 0, KEYEVENTF_KEYUP)])
+
+
+def screenshot_png(max_width: int = 1024) -> bytes:
+    """The main screen as PNG bytes, scaled down so a small local model can read it in reasonable time.
+    Kept in memory only."""
+    import io
+
+    from PIL import ImageGrab
+    img = ImageGrab.grab()
+    if img.width > max_width:
+        img = img.resize((max_width, round(img.height * max_width / img.width)))
+    out = io.BytesIO()
+    img.convert("RGB").save(out, format="PNG")
+    return out.getvalue()

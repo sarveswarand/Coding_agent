@@ -459,6 +459,33 @@ async def press_key_action(ctx: Ctx, text: str) -> Result | None:
     return Result(f"Pressed {m.group('k').lower()}.")
 
 
+# ---- looking at the screen (the picture stays on this PC: a local vision model reads it) ----------
+
+SCREEN_LOOK = (r"what('s| is)?\s+(on|in)\s+(my|the)\s+(screen|display|monitor)|"
+               r"\b(look at|see|read|describe|check)\s+(my|the)\s+screen|what\s+(do|can)\s+you\s+see|"
+               r"what\s+am\s+i\s+(looking at|seeing)")
+
+
+@action("look_screen", SCREEN_LOOK, 10)
+async def look_screen_action(ctx: Ctx, text: str) -> Result:
+    if not desktop.supported():
+        return Result(WINDOWS_ONLY)
+    if local_llm.vision_model_name() is None:
+        return Result("I don't have a vision model yet. On the PC, run: ollama pull qwen2.5vl:3b")
+
+    async def work() -> str:
+        png = await asyncio.to_thread(desktop.screenshot_png)
+        # No hints about what should be there: a small model repeats them as if it had read them off the screen.
+        seen = await local_llm.describe_image(
+            png, "This is a screenshot of a computer screen. In at most three short plain sentences, say which "
+                 "app or website is in front and what it shows, quoting any important text exactly as you read it. "
+                 "Only describe what you can actually see.")
+        return seen or "I couldn't read the screen. The vision model didn't answer in time."
+
+    ctx.session.spawn(work())  # slow on a CPU: answer right away, speak the description when it's ready
+    return Result("Looking at your screen. This takes a moment.")
+
+
 @action("switch_project", r"\b(switch|change|go|use|select|work|move|set)\b", 10)
 async def switch_project_action(ctx: Ctx, text: str) -> Result | None:
     target, candidates = find_project(text, list_projects())
