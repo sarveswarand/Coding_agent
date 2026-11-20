@@ -201,11 +201,12 @@ function fail(e) {
 async function attach(after) {
   if (attached) return;
   attached = true;
+  const mySid = sessionId;  // a spoken project switch starts a new session: stop following the old one
   let delay = 1000;
   try {
     while (true) {
       try {
-        const res = await api(`/sessions/${sessionId}/events?after=${cursor ?? after}`);
+        const res = await api(`/sessions/${mySid}/events?after=${cursor ?? after}`);
         delay = 1000;
         const reader = res.body.getReader(), dec = new TextDecoder();
         let buf = "";
@@ -216,7 +217,7 @@ async function attach(after) {
           let i;
           while ((i = buf.indexOf("\n\n")) >= 0) {
             const frame = buf.slice(0, i); buf = buf.slice(i + 2);
-            if (frame.startsWith("data: ")) handle(JSON.parse(frame.slice(6)));
+            if (frame.startsWith("data: ")) handle(JSON.parse(frame.slice(6)), mySid);
           }
         }
         if (!running) break;  // server closed after the run ended
@@ -231,13 +232,17 @@ async function attach(after) {
   } finally { attached = false; updateStatus(); }
 }
 
-function handle(ev) {
+function handle(ev, sid) {
+  if (sid !== sessionId) return;
   if (ev.seq !== undefined) cursor = Math.max(cursor, ev.type === "idle" ? ev.seq : ev.seq + 1);
   const live = (ev.seq ?? Infinity) >= liveFrom;
   switch (ev.type) {
     case "user": add("msg user", ev.text); running = true; break;
     case "steer": add("msg steer", ev.text); break;
     case "said": add("msg user", ev.text); break;  // a spoken command that wasn't a prompt
+    case "project":  // the server switched project by voice: follow it, in a fresh conversation
+      if (live) switchProject(ev.path);
+      break;
     case "voice": add("msg assistant", ev.text); if (live) say(ev.text); break;
     case "text": add("msg assistant", ev.text); if (live) say(speakable(ev.text)); break;
     case "tool_call": add("act", "▸ " + (ev.speech || ev.name)); if (live && ev.speech) say(ev.speech, { droppable: true }); break;
@@ -301,7 +306,16 @@ $("stopBtn").addEventListener("click", stop);
 $("approveBtn").addEventListener("click", () => decide(true, false));
 $("alwaysBtn").addEventListener("click", () => decide(true, true));
 $("rejectBtn").addEventListener("click", () => decide(false, false));
-$("workspace").addEventListener("change", (e) => store.set("workspace", e.target.value));
+function switchProject(path) {
+  const sel = $("workspace");
+  if (![...sel.options].some((o) => o.value === path)) sel.add(new Option(path.split(/[\/]/).pop(), path));
+  sel.value = path; store.set("workspace", path);
+  sessionId = newSession(); cursor = 0; liveFrom = 0; running = false;  // Claude Code conversations belong to one folder
+}
+$("workspace").addEventListener("change", (e) => {
+  switchProject(e.target.value);
+  add("note", "Switched to " + e.target.selectedOptions[0].text);
+});
 $("settingsBtn").addEventListener("click", () => { $("settings").hidden = !$("settings").hidden; });
 $("saveSettings").addEventListener("click", () => {
   if ($("tokenInput").value.trim()) { token = $("tokenInput").value.trim(); store.set("token", token); }

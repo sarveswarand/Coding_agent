@@ -128,8 +128,13 @@ In the phone app's settings, **Agent** can be *Claude Code (on the PC)*. The bac
 
 The phone's voice layer never uses a cloud API key: its own thinking (status summaries) and the built-in agent run on a local Ollama model (`LOCAL_MODEL` in `.env`, else the first installed one; a small model such as `qwen3:1.7b` or `llama3.2:3b` is plenty and much faster on CPU). The server handles a few spoken commands itself and sends everything else to the agent as a prompt:
 
-- **"open Claude Code"**: opens the project in VS Code and shows the Claude Code panel, on the same conversation the voice agent is using.
-- **"what's happening?"** (also "status", "are you done?"): a one- or two-sentence spoken update on what the agent is doing, even mid-run.
+- **"open VS Code"** / **"open the MyApp folder"** / **"open MyApp"**: opens VS Code, on that project if you name one. Names are matched loosely ("coding agent" finds `Coding_Agent`); if two projects fit, it asks which.
+- **"open Claude Code"** (optionally "...in ai recommendation"): opens the project in VS Code and shows the Claude Code panel, on the same conversation the voice agent is using.
+- **"switch to MyApp"** / **"use MyApp"**: makes it the active project (each project gets its own conversation). It won't switch while the agent is working.
+- **"list my projects"**: reads out the projects it can see.
+- **"what's happening?"** (also "status", "are you done?"): a short spoken update, even mid-run.
 - **"stop"**: cancels the run. **"yes"/"no"**: answers an approval.
+
+Projects are the folders directly inside the ones you allowed with `pair --workspace`; nothing outside them can be opened. New commands are small functions registered with `@action` in `app/assistant.py`.
 
 Limit: VS Code only lets other programs open the Claude Code panel (and optionally prefill a prompt). It can't be typed into or read from outside, so prompts spoken to the phone run through the Claude Code CLI on that same conversation, and the panel shows that conversation when opened.

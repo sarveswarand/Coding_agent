@@ -201,16 +201,15 @@ async def v1_say(req: RunReq):
     happening?) are handled here; anything else goes to the coding agent as a prompt."""
     workspace = check_workspace(req.workspace, remote=True)
     s = runs.get(req.session_id)
-    intent = assistant.classify(req.message)
-    if intent == "prompt":
-        return {**await v1_start(req), "handled": None, "active": True}
+    result = await assistant.handle(
+        req.message, assistant.Ctx(workspace, s, cli_runner.session_for(req.session_id)))
+    if result is None:
+        return {**await v1_start(req), "handled": False, "active": True}
     s.emit({"type": "said", "text": req.message})
-    if intent == "open":
-        reply = await assistant.open_claude_code(workspace, cli_runner.session_for(req.session_id))
-    else:
-        reply = await assistant.status(s)
-    s.emit({"type": "voice", "text": reply, "speech": reply})
-    return {"handled": intent, "active": s.active, "next_seq": s.next_seq}
+    s.emit({"type": "voice", "text": result.reply, "speech": result.reply})
+    if result.project:  # the active project changed: tell the phone, which starts a fresh conversation there
+        s.emit({"type": "project", "name": result.project.spoken, "path": result.project.path})
+    return {"handled": True, "active": s.active, "next_seq": s.next_seq}
 
 
 @remote.get("/sessions/{session_id}")
