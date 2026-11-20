@@ -7,3 +7,4 @@ out/
 *.vsix
 usage.jsonl
 bench/results/
+.cli_sessions.json

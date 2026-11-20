@@ -16,6 +16,9 @@
 </header>
 
 <div id="settings" hidden>
+  <label>Agent
+    <select id="mode"><option value="claude">Claude Code (on the PC)</option><option value="builtin">Built-in agent</option></select>
+  </label>
   <label>Server token <input id="tokenInput" type="password" autocomplete="off"></label>
   <label><input id="autoEdits" type="checkbox"> Apply file edits without asking (commands still ask)</label>
   <label><input id="speakToggle" type="checkbox" checked> Speak replies</label>

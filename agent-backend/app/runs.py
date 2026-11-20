@@ -7,6 +7,7 @@ live. Dropping the connection never stops the run: only an explicit cancel does.
 import asyncio
 import os
 
+from .cli_runner import run_claude
 from .orchestrator import run_agent
 
 MAX_LOG = 5000  # events kept per session; the oldest are dropped past this
@@ -27,14 +28,15 @@ def speech_for(ev: dict) -> str | None:
             "git_diff": "Checking the changes.",
             "edit_file": f"Editing {os.path.basename(str(a.get('path', 'a file')))}.",
             "run_command": f"Running {str(a.get('command', 'a command'))[:80]}.",
-        }.get(n)
+        }.get(n, f"Using {n}.")
     if t == "tool_result" and ev.get("is_error"):
         return "That step failed."
     if t == "approval_request":
-        a = ev.get("input") or {}
         if ev["name"] == "run_command":
             return f"I want to run {str(ev.get('preview', ''))[:80]}. Approve?"
-        return "I want to make an edit. Approve?"
+        if ev["name"] == "edit_file":
+            return "I want to make an edit. Approve?"
+        return f"I want to use {ev['name']}. Approve?"
     if t == "auto_approved":
         return None
     if t == "stopped":
@@ -95,9 +97,10 @@ def get(session_id: str) -> Session:
     return sessions.setdefault(session_id, Session())
 
 
-async def _drive(s: Session, **kw) -> None:
+async def _drive(s: Session, mode: str = "builtin", **kw) -> None:
+    runner = run_claude if mode == "claude" else run_agent
     try:
-        async for ev in run_agent(inbox=s.inbox, narrate=True, **kw):
+        async for ev in runner(inbox=s.inbox, narrate=True, **kw):
             s.emit(ev)
     except asyncio.CancelledError:
         s.emit({"type": "stopped"})  # not re-raised: the task ends normally, history is repaired by run_agent

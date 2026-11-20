@@ -119,3 +119,17 @@ The backend serves a web app at `/app/` that you can open on your phone (and add
 3. Open the printed link on the phone. Pick a project folder and tap **Talk**.
 
 Security notes: `/v1/*` always needs the token and only works inside `AGENT_WORKSPACES`. The VS Code endpoints stay open for direct local connections only; anything arriving through a proxy such as `tailscale serve` is treated as remote and needs the token. Anyone holding the token can run commands on the PC, so keep the link private; `python -m app.pair --new-token` revokes it. Voice recognition uses the phone browser's built-in speech service (Chrome on Android works best; on iPhone use the keyboard's dictation button).
+
+### Claude Code mode
+
+In the phone app's settings, **Agent** can be *Claude Code (on the PC)*. The backend then runs your installed Claude Code (`claude -p`, found on PATH, via `CLAUDE_BIN`, or in the VS Code extension folder) in the chosen project and relays what it does: narration, tool activity, and approval prompts that you answer on the phone. It uses your Claude Code login; `ANTHROPIC_API_KEY` is never passed to it. Conversations continue across messages (ids are kept in `agent-backend/.cli_sessions.json`). Stop ends the process and anything it started.
+
+### Voice commands and the local model
+
+The phone's voice layer never uses a cloud API key: its own thinking (status summaries) and the built-in agent run on a local Ollama model (`LOCAL_MODEL` in `.env`, else the first installed one; a small model such as `qwen3:1.7b` or `llama3.2:3b` is plenty and much faster on CPU). The server handles a few spoken commands itself and sends everything else to the agent as a prompt:
+
+- **"open Claude Code"**: opens the project in VS Code and shows the Claude Code panel, on the same conversation the voice agent is using.
+- **"what's happening?"** (also "status", "are you done?"): a one- or two-sentence spoken update on what the agent is doing, even mid-run.
+- **"stop"**: cancels the run. **"yes"/"no"**: answers an approval.
+
+Limit: VS Code only lets other programs open the Claude Code panel (and optionally prefill a prompt). It can't be typed into or read from outside, so prompts spoken to the phone run through the Claude Code CLI on that same conversation, and the panel shows that conversation when opened.

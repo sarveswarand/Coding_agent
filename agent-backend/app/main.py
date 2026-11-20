@@ -7,12 +7,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import APIRouter, Depends, FastAPI, Request  # noqa: E402
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request  # noqa: E402
 from fastapi.responses import RedirectResponse, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from . import runs, usage  # noqa: E402
+from . import assistant, cli_runner, local_llm, runs, usage  # noqa: E402
 from .gateway import list_models  # noqa: E402
 from .orchestrator import pending, run_agent  # noqa: E402
 from .security import allowed_roots, check_workspace, is_direct_local, require_local_or_token, require_token  # noqa: E402
@@ -62,6 +62,11 @@ class CancelReq(BaseModel):
 
 
 stops: dict[str, asyncio.Event] = {}  # session_id -> set when the user presses Stop
+
+
+@app.on_event("startup")
+async def _warm_local_model():
+    asyncio.create_task(local_llm.warm_up())  # background: don't hold up startup
 
 
 @local.get("/models")
@@ -142,6 +147,7 @@ class RunReq(BaseModel):
     session_id: str
     workspace: str
     message: str
+    mode: Literal["builtin", "claude"] = "builtin"  # which agent does the work
     model: str | None = None
     approval_mode: Literal["ask", "autoEdits"] = "ask"
     allowed_commands: list[str] = []
@@ -153,7 +159,8 @@ class SteerReq(BaseModel):
 
 @remote.get("/models")
 async def v1_models():
-    return list_models()
+    """Local models only: the phone never uses a cloud API key."""
+    return [m for m in list_models() if m["provider"] == "ollama"]
 
 
 @remote.get("/workspaces")
@@ -175,9 +182,35 @@ async def v1_start(req: RunReq):
     workspace = check_workspace(req.workspace, remote=True)
     if runs.steer(req.session_id, req.message):
         return {"steered": True, "next_seq": runs.get(req.session_id).next_seq}
-    s = runs.start(req.session_id, workspace=workspace, user_text=req.message, model=req.model,
+    model = None
+    if req.mode == "claude":
+        if not cli_runner.available():
+            raise HTTPException(503, "Claude Code isn't installed on this PC (set CLAUDE_BIN to its path).")
+    else:  # the built-in agent: a local model only, whatever the client asked for
+        model = local_llm.local_model_id()
+        if not model:
+            raise HTTPException(503, "No local model found. Start Ollama and pull one (e.g. `ollama pull qwen3:8b`).")
+    s = runs.start(req.session_id, mode=req.mode, workspace=workspace, user_text=req.message, model=model,
                    approval_mode=req.approval_mode, allowed_commands=req.allowed_commands)
     return {"steered": False, "next_seq": s.next_seq}
+
+
+@remote.post("/say")
+async def v1_say(req: RunReq):
+    """What the user said by voice. Commands for the assistant itself (open Claude Code, what's
+    happening?) are handled here; anything else goes to the coding agent as a prompt."""
+    workspace = check_workspace(req.workspace, remote=True)
+    s = runs.get(req.session_id)
+    intent = assistant.classify(req.message)
+    if intent == "prompt":
+        return {**await v1_start(req), "handled": None, "active": True}
+    s.emit({"type": "said", "text": req.message})
+    if intent == "open":
+        reply = await assistant.open_claude_code(workspace, cli_runner.session_for(req.session_id))
+    else:
+        reply = await assistant.status(s)
+    s.emit({"type": "voice", "text": reply, "speech": reply})
+    return {"handled": intent, "active": s.active, "next_seq": s.next_seq}
 
 
 @remote.get("/sessions/{session_id}")

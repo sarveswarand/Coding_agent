@@ -168,14 +168,17 @@ async function send(text) {
   if (!text.trim()) return;
   const workspace = $("workspace").value;
   if (!workspace) { add("note", "Pick a project folder first."); return; }
+  const wasRunning = running;
   try {
-    running = true; updateStatus();
-    await post("/runs", {
-      session_id: sessionId, workspace, message: text,
+    // the server decides: a command for the assistant (open Claude Code, what's happening?) or a prompt for the agent
+    const r = await post("/say", {
+      session_id: sessionId, workspace, message: text, mode: store.get("mode", "claude"),
       approval_mode: store.get("autoEdits") === "1" ? "autoEdits" : "ask",
     });
+    running = r.handled ? r.active : true;
+    updateStatus();
     attach(cursor);
-  } catch (e) { running = false; fail(e); }
+  } catch (e) { running = wasRunning; fail(e); }
 }
 
 async function decide(approved, always) {
@@ -234,6 +237,8 @@ function handle(ev) {
   switch (ev.type) {
     case "user": add("msg user", ev.text); running = true; break;
     case "steer": add("msg steer", ev.text); break;
+    case "said": add("msg user", ev.text); break;  // a spoken command that wasn't a prompt
+    case "voice": add("msg assistant", ev.text); if (live) say(ev.text); break;
     case "text": add("msg assistant", ev.text); if (live) say(speakable(ev.text)); break;
     case "tool_call": add("act", "▸ " + (ev.speech || ev.name)); if (live && ev.speech) say(ev.speech, { droppable: true }); break;
     case "tool_result": if (ev.is_error) add("act err", "✗ " + ev.name + " failed"); break;
@@ -241,7 +246,8 @@ function handle(ev) {
     case "status": if (ev.text) setStatus(ev.text); break;
     case "approval_request":
       approval = { id: ev.id, name: ev.name };
-      $("approvalTitle").textContent = ev.name === "run_command" ? "Run this command?" : "Apply this edit?";
+      $("approvalTitle").textContent = ev.name === "run_command" ? "Run this command?"
+        : ev.name === "edit_file" ? "Apply this edit?" : "Allow " + ev.name + "?";
       $("approvalPreview").textContent = ev.preview || "";
       $("approval").hidden = false;
       if (live) { say(ev.speech || "Approve?"); }
@@ -300,12 +306,14 @@ $("settingsBtn").addEventListener("click", () => { $("settings").hidden = !$("se
 $("saveSettings").addEventListener("click", () => {
   if ($("tokenInput").value.trim()) { token = $("tokenInput").value.trim(); store.set("token", token); }
   store.set("autoEdits", $("autoEdits").checked ? "1" : "0");
+  store.set("mode", $("mode").value);
   store.set("speak", $("speakToggle").checked ? "1" : "0");
   $("settings").hidden = true; $("tokenInput").value = ""; loadWorkspaces(); resume();
 });
 $("newChat").addEventListener("click", () => { sessionId = newSession(); cursor = 0; liveFrom = 0; log.innerHTML = ""; running = false; $("settings").hidden = true; });
 
 $("autoEdits").checked = store.get("autoEdits") === "1";
+$("mode").value = store.get("mode", "claude");
 $("speakToggle").checked = store.get("speak", "1") === "1";
 if (!token) $("settings").hidden = false;
 else { loadWorkspaces(); resume(); }
